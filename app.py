@@ -15,21 +15,22 @@ TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Twilio Client
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Groq Client (OpenAI compatible)
 groq_client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# In-memory call sessions
+# In-memory storage
 call_sessions = {}
+
+# Your public Render URL (IMPORTANT)
+BASE_URL = "https://twillo-i353.onrender.com"
 
 
 # ============================================
-# ROOT TEST ROUTE
+# ROOT
 # ============================================
 @app.route("/")
 def home():
@@ -37,7 +38,7 @@ def home():
 
 
 # ============================================
-# START CALL (Telegram hits this)
+# START CALL (Triggered by Telegram)
 # ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
@@ -47,13 +48,13 @@ def start_call():
     phone_number = data.get("phone")
     business_type = data.get("business_type")
     goal = data.get("goal")
-    details = data.get("details")
+    details = data.get("details", {})
 
     if not phone_number:
         return jsonify({"error": "Phone number missing"}), 400
 
     call = twilio_client.calls.create(
-        url=f"{request.host_url}outbound-voice",
+        url=f"{BASE_URL}/outbound-voice",
         to=phone_number,
         from_=TWILIO_PHONE_NUMBER,
     )
@@ -72,7 +73,7 @@ def start_call():
 
 
 # ============================================
-# FIRST AI MESSAGE
+# FIRST MESSAGE
 # ============================================
 @app.route("/outbound-voice", methods=["POST"])
 def outbound_voice():
@@ -82,15 +83,20 @@ def outbound_voice():
 
     response = VoiceResponse()
 
+    if not session:
+        response.say("Sorry, there was an internal error. Goodbye.")
+        response.hangup()
+        return str(response)
+
     gather = Gather(
         input="speech",
-        action="/process-response",
+        action=f"{BASE_URL}/process-response",
         method="POST",
         speech_timeout="auto"
     )
 
     first_message = (
-        f"Hello, I am calling regarding {session['goal']}. "
+        f"Hello. I am calling regarding {session['goal']}. "
         f"My name is {session['details'].get('customer_name', 'Customer')}."
     )
 
@@ -106,7 +112,7 @@ def outbound_voice():
 
 
 # ============================================
-# PROCESS RESPONSE (LIVE CONVERSATION)
+# PROCESS RESPONSE
 # ============================================
 @app.route("/process-response", methods=["POST"])
 def process_response():
@@ -115,6 +121,13 @@ def process_response():
     user_speech = request.form.get("SpeechResult")
 
     session = call_sessions.get(call_sid)
+
+    response = VoiceResponse()
+
+    if not session:
+        response.say("Session expired. Goodbye.")
+        response.hangup()
+        return str(response)
 
     session["conversation"].append({
         "role": "user",
@@ -127,17 +140,17 @@ def process_response():
             {
                 "role": "system",
                 "content": f"""
-You are an AI assistant making a professional phone call.
+You are an AI assistant making a professional booking call.
 
 Business Type: {session['business_type']}
 Goal: {session['goal']}
-Booking Details: {session['details']}
+Details: {session['details']}
 
 Rules:
-- Speak clearly and professionally.
+- Speak professionally.
 - Keep replies short (1-2 sentences).
 - Confirm booking clearly.
-- When booking confirmed, say confirmation and end call.
+- If booking confirmed, end call politely.
 """
             }
         ] + session["conversation"]
@@ -150,8 +163,6 @@ Rules:
         "content": ai_reply
     })
 
-    response = VoiceResponse()
-
     if "confirmed" in ai_reply.lower():
         response.say(ai_reply)
         response.say("Thank you very much. Goodbye.")
@@ -159,7 +170,7 @@ Rules:
     else:
         gather = Gather(
             input="speech",
-            action="/process-response",
+            action=f"{BASE_URL}/process-response",
             method="POST",
             speech_timeout="auto"
         )
@@ -170,7 +181,7 @@ Rules:
 
 
 # ============================================
-# RUN APP
+# RUN
 # ============================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
