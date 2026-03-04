@@ -6,41 +6,62 @@ import os
 
 app = Flask(__name__)
 
-# Load environment variables
+# ============================================
+# ENV VARIABLES
+# ============================================
+
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-# Twilio client
+# Twilio Client
 twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
-# Groq client (OpenAI compatible)
+# Groq Client (OpenAI compatible)
 groq_client = OpenAI(
     api_key=GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-# Temporary in-memory session storage
+# In-memory call sessions
 call_sessions = {}
 
-# ✅ Start Outbound Call
+
+# ============================================
+# ROOT TEST ROUTE
+# ============================================
+@app.route("/")
+def home():
+    return "AI Calling Backend Running ✅"
+
+
+# ============================================
+# START CALL (Telegram hits this)
+# ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
+
     data = request.json
 
-    phone_number = data["phone"]
+    phone_number = data.get("phone")
+    business_type = data.get("business_type")
+    goal = data.get("goal")
+    details = data.get("details")
+
+    if not phone_number:
+        return jsonify({"error": "Phone number missing"}), 400
 
     call = twilio_client.calls.create(
         url=f"{request.host_url}outbound-voice",
         to=phone_number,
-        from_=TWILIO_PHONE_NUMBER
+        from_=TWILIO_PHONE_NUMBER,
     )
 
     call_sessions[call.sid] = {
-        "business_type": data["business_type"],
-        "goal": data["goal"],
-        "details": data["details"],
+        "business_type": business_type,
+        "goal": goal,
+        "details": details,
         "conversation": []
     }
 
@@ -50,9 +71,12 @@ def start_call():
     })
 
 
-# ✅ First AI Message
+# ============================================
+# FIRST AI MESSAGE
+# ============================================
 @app.route("/outbound-voice", methods=["POST"])
 def outbound_voice():
+
     call_sid = request.form.get("CallSid")
     session = call_sessions.get(call_sid)
 
@@ -65,10 +89,10 @@ def outbound_voice():
         speech_timeout="auto"
     )
 
-    first_message = f"""
-Hello, I am calling regarding {session['goal']}.
-My name is {session['details'].get('name', 'Customer')}.
-"""
+    first_message = (
+        f"Hello, I am calling regarding {session['goal']}. "
+        f"My name is {session['details'].get('customer_name', 'Customer')}."
+    )
 
     session["conversation"].append({
         "role": "assistant",
@@ -81,9 +105,12 @@ My name is {session['details'].get('name', 'Customer')}.
     return str(response)
 
 
-# ✅ Process Business Response
+# ============================================
+# PROCESS RESPONSE (LIVE CONVERSATION)
+# ============================================
 @app.route("/process-response", methods=["POST"])
 def process_response():
+
     call_sid = request.form.get("CallSid")
     user_speech = request.form.get("SpeechResult")
 
@@ -94,24 +121,23 @@ def process_response():
         "content": user_speech
     })
 
-    # Generate AI reply using Groq
     completion = groq_client.chat.completions.create(
         model="llama3-8b-8192",
         messages=[
             {
                 "role": "system",
                 "content": f"""
-You are an AI assistant making a phone call.
+You are an AI assistant making a professional phone call.
 
 Business Type: {session['business_type']}
 Goal: {session['goal']}
-Customer Details: {session['details']}
+Booking Details: {session['details']}
 
 Rules:
-- Speak naturally and professionally.
-- Keep responses short (max 2 sentences).
-- Achieve the goal.
-- Once booking is confirmed, clearly say confirmation and end politely.
+- Speak clearly and professionally.
+- Keep replies short (1-2 sentences).
+- Confirm booking clearly.
+- When booking confirmed, say confirmation and end call.
 """
             }
         ] + session["conversation"]
@@ -126,8 +152,7 @@ Rules:
 
     response = VoiceResponse()
 
-    # Simple completion detection
-    if "confirmed" in ai_reply.lower() or "appointment scheduled" in ai_reply.lower():
+    if "confirmed" in ai_reply.lower():
         response.say(ai_reply)
         response.say("Thank you very much. Goodbye.")
         response.hangup()
@@ -144,6 +169,8 @@ Rules:
     return str(response)
 
 
-# ✅ Run App
+# ============================================
+# RUN APP
+# ============================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
