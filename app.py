@@ -9,7 +9,6 @@ app = Flask(__name__)
 # ============================================
 # ENV VARIABLES
 # ============================================
-
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
@@ -25,8 +24,8 @@ groq_client = OpenAI(
 # In-memory storage
 call_sessions = {}
 
-# Your public Render URL (IMPORTANT)
-BASE_URL = "https://twillo-i353.onrender.com"
+# Your public URL
+BASE_URL = "https://your-app.up.railway.app" # IMPORTANT: Update this to your active Railway or Render URL
 
 
 # ============================================
@@ -42,7 +41,6 @@ def home():
 # ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
-
     data = request.json
 
     phone_number = data.get("phone")
@@ -53,23 +51,30 @@ def start_call():
     if not phone_number:
         return jsonify({"error": "Phone number missing"}), 400
 
-    call = twilio_client.calls.create(
-        url=f"{BASE_URL}/outbound-voice",
-        to=phone_number,
-        from_=TWILIO_PHONE_NUMBER,
-    )
+    # ==========================================
+    # THE QUICK FIX: Overwrite "OTHER"
+    # ==========================================
+    if goal and goal.upper() == "OTHER":
+        goal = details.get("Specific Requirements", "an appointment")
+    # ==========================================
 
-    call_sessions[call.sid] = {
-        "business_type": business_type,
-        "goal": goal,
-        "details": details,
-        "conversation": []
-    }
+    try:
+        call = twilio_client.calls.create(
+            url=f"{BASE_URL}/outbound-voice",
+            to=phone_number,
+            from_=TWILIO_PHONE_NUMBER,
+        )
 
-    return jsonify({
-        "status": "calling",
-        "call_sid": call.sid
-    })
+        call_sessions[call.sid] = {
+            "business_type": business_type,
+            "goal": goal,
+            "details": details,
+            "conversation": []
+        }
+
+        return jsonify({"status": "calling", "call_sid": call.sid})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ============================================
@@ -77,22 +82,22 @@ def start_call():
 # ============================================
 @app.route("/outbound-voice", methods=["POST"])
 def outbound_voice():
-
     call_sid = request.form.get("CallSid")
     session = call_sessions.get(call_sid)
-
     response = VoiceResponse()
 
     if not session:
-        response.say("Sorry, there was an internal error. Goodbye.")
+        response.say("Sorry, an error occurred. Goodbye.")
         response.hangup()
         return str(response)
 
+    # action_on_empty_result prevents the call from dropping if they are silent
     gather = Gather(
         input="speech",
         action=f"{BASE_URL}/process-response",
         method="POST",
-        speech_timeout="auto"
+        speech_timeout="auto",
+        action_on_empty_result=True 
     )
 
     first_message = (
@@ -100,11 +105,8 @@ def outbound_voice():
         f"My name is {session['details'].get('customer_name', 'Customer')}."
     )
 
-    session["conversation"].append({
-        "role": "assistant",
-        "content": first_message
-    })
-
+    session["conversation"].append({"role": "assistant", "content": first_message})
+    
     gather.say(first_message)
     response.append(gather)
 
@@ -116,12 +118,9 @@ def outbound_voice():
 # ============================================
 @app.route("/process-response", methods=["POST"])
 def process_response():
-
     call_sid = request.form.get("CallSid")
     user_speech = request.form.get("SpeechResult")
-
     session = call_sessions.get(call_sid)
-
     response = VoiceResponse()
 
     if not session:
@@ -129,50 +128,59 @@ def process_response():
         response.hangup()
         return str(response)
 
-    session["conversation"].append({
-        "role": "user",
-        "content": user_speech
-    })
+    # 1. Handle Empty Speech (Silence or unrecognized audio)
+    if not user_speech:
+        gather = Gather(
+            input="speech",
+            action=f"{BASE_URL}/process-response",
+            method="POST",
+            speech_timeout="auto",
+            action_on_empty_result=True
+        )
+        gather.say("I'm sorry, I didn't catch that. Are you still there?")
+        response.append(gather)
+        return str(response)
 
-    completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {
-                "role": "system",
-                "content": f"""
+    session["conversation"].append({"role": "user", "content": user_speech})
+
+    # 2. Strong Prompt Engineering for Call Termination
+    system_prompt = f"""
 You are an AI assistant making a professional booking call.
-
 Business Type: {session['business_type']}
 Goal: {session['goal']}
 Details: {session['details']}
 
 Rules:
-- Speak professionally.
-- Keep replies short (1-2 sentences).
-- Confirm booking clearly.
-- If booking confirmed, end call politely.
+- Speak professionally and keep replies to 1 or 2 short sentences.
+- Confirm the booking clearly based on the details provided.
+- IMPORTANT: When the booking is fully confirmed and the conversation is naturally ending, you MUST output the exact word [HANGUP] at the very end of your final sentence. Do not use this word until it is time to say goodbye.
 """
-            }
-        ] + session["conversation"]
-    )
 
-    ai_reply = completion.choices[0].message.content
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "system", "content": system_prompt}] + session["conversation"]
+        )
+        ai_reply = completion.choices[0].message.content
+    except Exception as e:
+        response.say("I'm experiencing technical difficulties. I will call back later.")
+        response.hangup()
+        return str(response)
 
-    session["conversation"].append({
-        "role": "assistant",
-        "content": ai_reply
-    })
+    session["conversation"].append({"role": "assistant", "content": ai_reply})
 
-    if "confirmed" in ai_reply.lower():
-        response.say(ai_reply)
-        response.say("Thank you very much. Goodbye.")
+    # 3. Check for our secure Hangup Token
+    if "[HANGUP]" in ai_reply:
+        clean_reply = ai_reply.replace("[HANGUP]", "").strip()
+        response.say(clean_reply)
         response.hangup()
     else:
         gather = Gather(
             input="speech",
             action=f"{BASE_URL}/process-response",
             method="POST",
-            speech_timeout="auto"
+            speech_timeout="auto",
+            action_on_empty_result=True
         )
         gather.say(ai_reply)
         response.append(gather)
@@ -180,8 +188,5 @@ Rules:
     return str(response)
 
 
-# ============================================
-# RUN
-# ============================================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
