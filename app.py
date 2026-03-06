@@ -25,7 +25,7 @@ groq_client = OpenAI(
 call_sessions = {}
 
 # Your public URL
-BASE_URL = "https://your-app.up.railway.app" # IMPORTANT: Update this to your active Railway or Render URL
+BASE_URL = "https://twillo-i353.onrender.com" # IMPORTANT: Update this to your active Railway or Render URL
 
 
 # ============================================
