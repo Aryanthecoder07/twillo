@@ -153,11 +153,29 @@ def process_response():
             # ==========================================
             chat_id = session.get("chat_id")
             if chat_id and TELEGRAM_BOT_TOKEN:
-                summary = "✅ **Booking Call Completed!**\n\n**Transcript:**\n\n"
-                for msg in session["conversation"]:
-                    role = "🤖 AI" if msg["role"] == "assistant" else "👤 User"
-                    summary += f"{role}: {msg['content']}\n\n"
+                
+                # 1. Quick check if the booking was successful based on the chat
+                full_chat = str(session["conversation"]).lower()
+                if "confirm" in full_chat or "book" in full_chat or "thank" in full_chat:
+                    header = "✅ **Booking Confirmed!**"
+                else:
+                    header = "❌ **Booking Failed or Cancelled.**"
 
+                # 2. Start building the message
+                summary = f"{header}\n\n**Call Transcript:**\n\n"
+                
+                # 3. Add the transcript
+                for msg in session["conversation"]:
+                    role = "🤖 AI" if msg["role"] == "assistant" else "👤 Business"
+                    clean_msg = msg['content'].replace('[HANGUP]', '').strip()
+                    if clean_msg:  # Only add if it's not empty
+                        summary += f"{role}: {clean_msg}\n\n"
+                
+                # 4. Add the final instructions
+                summary += "────────────────\n"
+                summary += "🔄 **Send /start to make a new booking!**"
+
+                # Send it!
                 telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                 requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
             # ==========================================
