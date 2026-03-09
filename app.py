@@ -1,33 +1,23 @@
 import os
 import requests
 from flask import Flask, request, jsonify
-from twilio.rest import Client
-from twilio.twiml.voice_response import VoiceResponse, Gather
-from groq import Groq
 
 app = Flask(__name__)
 
 # ============================================
 # CREDENTIALS & SETUP
 # ============================================
-TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.environ.get("TWILIO_PHONE_NUMBER")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-
-# NEW: We need your Telegram Token to send the receipt back!
+# 1. Telegram Token for sending the final receipt
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
 
-# YOUR RENDER URL (No trailing slash)
+# 2. Your Render URL (Used so Vapi knows where to send the transcript)
 BASE_URL = os.environ.get("BASE_URL", "https://twillo-i353.onrender.com")
 
-# The Human-Like Global Voice
-VOICE_NAME = "Polly.Joanna-Neural"
+# 3. Vapi Credentials (You will get these from the Vapi Dashboard)
+VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
+VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 
-twilio_client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-# In-memory storage for active calls
+# In-memory storage to match Vapi Calls to Telegram Users
 call_sessions = {}
 
 # ============================================
@@ -35,163 +25,134 @@ call_sessions = {}
 # ============================================
 @app.route("/")
 def home():
-    return "AI Calling Backend Running ✅"
+    return "Vapi AI Calling Backend Running ✅"
 
 # ============================================
-# ROUTE 2: START THE CALL (From Telegram)
+# ROUTE 2: START THE CALL (Triggered by bot.py)
 # ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
     data = request.json
     
     phone_number = data.get("phone")
-    chat_id = data.get("chat_id") # <-- Capturing the Telegram chat ID!
+    chat_id = data.get("chat_id")
     business_type = data.get("business_type", "Business")
     goal = data.get("goal", "make an inquiry")
     details = data.get("details", {})
 
-    try:
-        call = twilio_client.calls.create(
-            to=phone_number,
-            from_=TWILIO_PHONE_NUMBER,
-            url=f"{BASE_URL}/outbound-voice"
-        )
-        
-        # Save all details, INCLUDING chat_id, to memory
-        call_sessions[call.sid] = {
-            "chat_id": chat_id,
-            "business_type": business_type,
-            "goal": goal,
-            "details": details,
-            "conversation": []
-        }
-        
-        return jsonify({"status": "calling", "call_sid": call.sid})
-    except Exception as e:
-        print(f"Error starting call: {e}")
-        return jsonify({"error": str(e)}), 500
+    customer_name = details.get("customer_name", "a customer")
+    opening_line = f"Hello, I am calling regarding {business_type.lower()}. My name is {customer_name}."
 
-# ============================================
-# ROUTE 3: TWILIO ANSWERS THE PHONE
-# ============================================
-@app.route("/outbound-voice", methods=["POST"])
-def outbound_voice():
-    call_sid = request.form.get("CallSid")
-    session = call_sessions.get(call_sid)
-    response = VoiceResponse()
-
-    if not session:
-        response.say("Sorry, an error occurred. Goodbye.", voice=VOICE_NAME)
-        response.hangup()
-        return str(response)
-
-    # Construct the opening line
-    customer_name = session["details"].get("customer_name", "a customer")
-    opening_line = f"Hello, I am calling regarding {session['business_type'].lower()}. My name is {customer_name}."
-    
-    # Save bot's opening line to memory
-    session["conversation"].append({"role": "assistant", "content": opening_line})
-    
-    # Speak the opening line with the Neural Voice
-    gather = Gather(input="speech", action=f"/process-response?CallSid={call_sid}", speechTimeout="auto")
-    gather.say(opening_line, voice=VOICE_NAME)
-    response.append(gather)
-
-    return str(response)
-
-# ============================================
-# ROUTE 4: AI PROCESSES USER SPEECH
-# ============================================
-@app.route("/process-response", methods=["POST"])
-def process_response():
-    call_sid = request.args.get("CallSid")
-    user_speech = request.form.get("SpeechResult", "")
-    
-    session = call_sessions.get(call_sid)
-    response = VoiceResponse()
-
-    if not session or not user_speech:
-        response.say("I didn't catch that. Could you repeat?", voice=VOICE_NAME)
-        gather = Gather(input="speech", action=f"/process-response?CallSid={call_sid}", speechTimeout="auto")
-        response.append(gather)
-        return str(response)
-
-    # Save user speech
-    session["conversation"].append({"role": "user", "content": user_speech})
-
-    # Build the strict Prompt for Groq
+    # The "Chameleon" Prompt - Instructs Vapi to mirror the user's language (Hindi/English)
     system_prompt = f"""
-    You are a polite AI assistant calling a {session['business_type']}.
-    Your goal is: {session['goal']}.
-    Here are the details you MUST provide if asked: {session['details']}.
+    You are a polite, highly intelligent, multilingual AI assistant calling a {business_type}.
+    Your goal is: {goal}.
+    Here are the details you MUST provide if asked: {details}.
     
     RULES:
-    1. Keep responses very short (1-2 sentences max).
+    1. Keep responses very short and conversational (1-2 sentences max).
     2. Speak naturally like a human.
-    3. If the goal is completely achieved or the business hangs up, your response MUST include the exact word [HANGUP].
+    3. LANGUAGE MIRRORING: You must ALWAYS reply in the exact same language the user is speaking. 
+       If they speak English, reply in English. If they speak Hindi or Hinglish, instantly switch and reply in natural Hindi/Hinglish.
+    4. When the goal is completely achieved, politely say goodbye and end the call.
     """
 
+    # Build the request for Vapi
+    vapi_payload = {
+        "phoneNumberId": VAPI_PHONE_NUMBER_ID,
+        "customer": {
+            "number": phone_number
+        },
+        "assistant": {
+            "name": "Booking Assistant",
+            "firstMessage": opening_line,
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "system", "content": system_prompt}]
+            },
+            "voice": {
+                "provider": "11labs",
+                "voiceId": "bIHbv24MWmeRgasZH58o" # A premium multilingual voice from ElevenLabs
+            },
+            # Tell Vapi where to send the final transcript when they hang up!
+            "serverUrl": f"{BASE_URL}/vapi-webhook" 
+        }
+    }
+
     try:
-        # Ask Groq what to say (USING LLAMA-3.1-8B-INSTANT)
-        completion = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "system", "content": system_prompt}] + session["conversation"]
+        # Send the command to Vapi!
+        response = requests.post(
+            "https://api.vapi.ai/call/phone",
+            headers={"Authorization": f"Bearer {VAPI_API_KEY}"},
+            json=vapi_payload,
+            timeout=30
         )
-        ai_reply = completion.choices[0].message.content
-        
-        # We don't save [HANGUP] to the visual transcript
-        clean_transcript_reply = ai_reply.replace("[HANGUP]", "").strip()
-        session["conversation"].append({"role": "assistant", "content": clean_transcript_reply})
+        response_data = response.json()
 
-        # CHECK IF AI DECIDED TO HANG UP
-        if "[HANGUP]" in ai_reply:
-            response.say(clean_transcript_reply, voice=VOICE_NAME)
-            response.hangup()
+        # 201 Created means Vapi accepted the call successfully
+        if response.status_code == 201:
+            vapi_call_id = response_data.get("id")
             
-            # ==========================================
-            # SEND FINAL TRANSCRIPT TO TELEGRAM
-            # ==========================================
-            chat_id = session.get("chat_id")
-            if chat_id and TELEGRAM_BOT_TOKEN:
-                
-                # 1. Quick check if the booking was successful based on the chat
-                full_chat = str(session["conversation"]).lower()
-                if "confirm" in full_chat or "book" in full_chat or "thank" in full_chat:
-                    header = "✅ **Booking Confirmed!**"
-                else:
-                    header = "❌ **Booking Failed or Cancelled.**"
-
-                # 2. Start building the message
-                summary = f"{header}\n\n**Call Transcript:**\n\n"
-                
-                # 3. Add the transcript
-                for msg in session["conversation"]:
-                    role = "🤖 AI" if msg["role"] == "assistant" else "👤 Business"
-                    clean_msg = msg['content'].replace('[HANGUP]', '').strip()
-                    if clean_msg:  # Only add if it's not empty
-                        summary += f"{role}: {clean_msg}\n\n"
-                
-                # 4. Add the final instructions
-                summary += "────────────────\n"
-                summary += "🔄 **Send /start to make a new booking!**"
-
-                # Send it!
-                telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
-            # ==========================================
-
+            # Save the Chat ID so we know who to text when the call ends
+            call_sessions[vapi_call_id] = {"chat_id": chat_id}
+            
+            return jsonify({"status": "calling", "call_sid": vapi_call_id})
         else:
-            # Continue the conversation
-            gather = Gather(input="speech", action=f"/process-response?CallSid={call_sid}", speechTimeout="auto")
-            gather.say(ai_reply, voice=VOICE_NAME)
-            response.append(gather)
+            print(f"🚨 Vapi API Error: {response_data}", flush=True)
+            return jsonify({"error": "Failed to start Vapi call"}), 500
 
     except Exception as e:
-        print(f"🚨 GROQ API ERROR: {str(e)}", flush=True) 
-        response.say("I'm experiencing technical difficulties. I will call back later.", voice=VOICE_NAME)
-        response.hangup()
+        print(f"🚨 Error starting call: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
 
-    return str(response)
+
+# ============================================
+# ROUTE 3: VAPI WEBHOOK (The Final Receipt)
+# ============================================
+@app.route("/vapi-webhook", methods=["POST"])
+def vapi_webhook():
+    data = request.json
+    
+    # Vapi sends many background events, we only care when the call is completely over
+    message_data = data.get("message", {})
+    
+    if message_data.get("type") == "end-of-call-report":
+        vapi_call_id = message_data.get("call", {}).get("id")
+        session = call_sessions.get(vapi_call_id)
+        
+        # If we don't have the chat_id saved, we can't send a Telegram message
+        if not session or not session.get("chat_id"):
+            return "OK", 200
+
+        chat_id = session["chat_id"]
+        
+        # Grab the beautiful transcript Vapi generated
+        transcript_text = message_data.get("artifact", {}).get("transcript", "No transcript available.")
+        
+        # 1. Quick check if the booking was successful
+        transcript_lower = transcript_text.lower()
+        if "confirm" in transcript_lower or "book" in transcript_lower or "thank" in transcript_lower:
+            header = "✅ **Booking Confirmed!**"
+        else:
+            header = "❌ **Booking Failed or Cancelled.**"
+
+        # 2. Build the final Telegram message
+        summary = f"{header}\n\n**Call Transcript:**\n\n{transcript_text}\n\n"
+        
+        # 3. Add the final instructions
+        summary += "────────────────\n"
+        summary += "🔄 **Send /start to make a new booking!**"
+
+        # Send it to Telegram!
+        if TELEGRAM_BOT_TOKEN:
+            telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
+            
+        # Clean up memory so the server doesn't get bloated
+        del call_sessions[vapi_call_id]
+
+    return "OK", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
