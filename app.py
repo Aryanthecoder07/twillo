@@ -13,7 +13,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 # 2. Your Render URL (Used so Vapi knows where to send the transcript)
 BASE_URL = os.environ.get("BASE_URL", "https://twillo-i353.onrender.com")
 
-# 3. Vapi Credentials (You will get these from the Vapi Dashboard)
+# 3. Vapi Credentials (from Vapi Dashboard)
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 
@@ -28,7 +28,7 @@ def home():
     return "Vapi AI Calling Backend Running ✅"
 
 # ============================================
-# ROUTE 2: START THE CALL (Triggered by bot.py)
+# ROUTE 2: START THE CALL
 # ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
@@ -36,28 +36,30 @@ def start_call():
     
     phone_number = data.get("phone")
     chat_id = data.get("chat_id")
-    business_type = data.get("business_type", "Business")
+    business_name = data.get("business_type", "the business")
     goal = data.get("goal", "make an inquiry")
     details = data.get("details", {})
-
     customer_name = details.get("customer_name", "a customer")
-    opening_line = f"Hello, I am calling regarding {business_type.lower()}. My name is {customer_name}."
 
-    # The "Chameleon" Prompt - Instructs Vapi to mirror the user's language (Hindi/English)
+    # The goal is passed from call_agent.py (e.g., "haircut appointment" or "table booking")
+    # This opening line ensures the AI states the reason for calling immediately.
+    opening_line = f"Hello, I am calling regarding a {goal.lower()} for {customer_name}. Am I speaking with {business_name}?"
+
+    # The System Prompt is now more concise to prevent repetition and handle multilingual needs.
     system_prompt = f"""
-    You are a polite, highly intelligent, multilingual AI assistant calling a {business_type}.
-    Your goal is: {goal}.
-    Here are the details you MUST provide if asked: {details}.
+    You are a polite, professional AI assistant calling {business_name}.
+    Your specific goal is: {goal}.
+    Information to provide: {details}.
     
     RULES:
-    1. Keep responses very short and conversational (1-2 sentences max).
-    2. Speak naturally like a human.
-    3. LANGUAGE MIRRORING: You must ALWAYS reply in the exact same language the user is speaking. 
-       If they speak English, reply in English. If they speak Hindi or Hinglish, instantly switch and reply in natural Hindi/Hinglish.
-    4. When the goal is completely achieved, politely say goodbye and end the call.
+    1. Confirm you are speaking with the right business first.
+    2. Once confirmed, provide the booking details (date, time, service) immediately.
+    3. Keep responses very short (1-2 sentences max).
+    4. LANGUAGE MIRRORING: If the user speaks Hindi or Hinglish, switch and reply in natural Hindi/Hinglish.
+    5. When the goal is achieved (e.g., appointment booked), say goodbye and end the call.
+    6. Do not repeat your opening introduction once the conversation moves forward.
     """
 
-    # Build the request for Vapi
     vapi_payload = {
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
@@ -69,19 +71,18 @@ def start_call():
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}]
+                "messages": [{"role": "system", "content": system_prompt}],
+                "temperature": 0.7
             },
             "voice": {
                 "provider": "11labs",
-                "voiceId": "bIHbv24MWmeRgasZH58o" # A premium multilingual voice from ElevenLabs
+                "voiceId": "bIHbv24MWmeRgasZH58o" # Premium multilingual voice
             },
-            # Tell Vapi where to send the final transcript when they hang up!
             "serverUrl": f"{BASE_URL}/vapi-webhook" 
         }
     }
 
     try:
-        # Send the command to Vapi!
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers={"Authorization": f"Bearer {VAPI_API_KEY}"},
@@ -90,20 +91,17 @@ def start_call():
         )
         response_data = response.json()
 
-        # 201 Created means Vapi accepted the call successfully
         if response.status_code == 201:
             vapi_call_id = response_data.get("id")
-            
-            # Save the Chat ID so we know who to text when the call ends
+            # Save session for the webhook
             call_sessions[vapi_call_id] = {"chat_id": chat_id}
-            
             return jsonify({"status": "calling", "call_sid": vapi_call_id})
         else:
             print(f"🚨 Vapi API Error: {response_data}", flush=True)
             return jsonify({"error": "Failed to start Vapi call"}), 500
 
     except Exception as e:
-        print(f"🚨 Error starting call: {e}", flush=True)
+        print(f"🚨 Connection Error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -113,44 +111,33 @@ def start_call():
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
     data = request.json
-    
-    # Vapi sends many background events, we only care when the call is completely over
     message_data = data.get("message", {})
     
     if message_data.get("type") == "end-of-call-report":
         vapi_call_id = message_data.get("call", {}).get("id")
         session = call_sessions.get(vapi_call_id)
         
-        # If we don't have the chat_id saved, we can't send a Telegram message
-        if not session or not session.get("chat_id"):
-            return "OK", 200
-
-        chat_id = session["chat_id"]
-        
-        # Grab the beautiful transcript Vapi generated
-        transcript_text = message_data.get("artifact", {}).get("transcript", "No transcript available.")
-        
-        # 1. Quick check if the booking was successful
-        transcript_lower = transcript_text.lower()
-        if "confirm" in transcript_lower or "book" in transcript_lower or "thank" in transcript_lower:
-            header = "✅ **Booking Confirmed!**"
-        else:
-            header = "❌ **Booking Failed or Cancelled.**"
-
-        # 2. Build the final Telegram message
-        summary = f"{header}\n\n**Call Transcript:**\n\n{transcript_text}\n\n"
-        
-        # 3. Add the final instructions
-        summary += "────────────────\n"
-        summary += "🔄 **Send /start to make a new booking!**"
-
-        # Send it to Telegram!
-        if TELEGRAM_BOT_TOKEN:
-            telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-            requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
+        if session:
+            chat_id = session["chat_id"]
+            transcript = message_data.get("artifact", {}).get("transcript", "No transcript available.")
             
-        # Clean up memory so the server doesn't get bloated
-        del call_sessions[vapi_call_id]
+            # Simple confirmation detection for the Telegram header
+            t_lower = transcript.lower()
+            if any(word in t_lower for word in ["confirm", "booked", "appointment set", "thank you"]):
+                header = "✅ **Booking Confirmed!**"
+            else:
+                header = "📞 **Call Finished**"
+
+            summary = f"{header}\n\n**Transcript:**\n\n{transcript}\n\n"
+            summary += "────────────────\n🔄 Send /start for a new request."
+
+            if TELEGRAM_BOT_TOKEN:
+                telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+                requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
+                
+            # Clean up memory
+            if vapi_call_id in call_sessions:
+                del call_sessions[vapi_call_id]
 
     return "OK", 200
 
