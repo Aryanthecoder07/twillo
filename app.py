@@ -36,7 +36,7 @@ def start_call():
     
     phone_number = data.get("phone")
     chat_id = data.get("chat_id")
-    business_name = data.get("business_type", "the business")
+    business_name = data.get("business_type", "the place")
     goal = data.get("goal", "make an inquiry")
     details = data.get("details", {})
     customer_name = details.get("customer_name", "a customer")
