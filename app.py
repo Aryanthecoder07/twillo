@@ -7,13 +7,8 @@ app = Flask(__name__)
 # ============================================
 # CREDENTIALS & SETUP
 # ============================================
-# 1. Telegram Token for sending the final receipt
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
-
-# 2. Your Render URL (Used so Vapi knows where to send the transcript)
 BASE_URL = os.environ.get("BASE_URL", "https://twillo-i353.onrender.com")
-
-# 3. Vapi Credentials (from Vapi Dashboard)
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 
@@ -41,23 +36,26 @@ def start_call():
     details = data.get("details", {})
     customer_name = details.get("customer_name", "a customer")
 
-    # The goal is passed from call_agent.py (e.g., "haircut appointment" or "table booking")
-    # This opening line ensures the AI states the reason for calling immediately.
+    # The AI introduces itself and immediately states the request.
     opening_line = f"Hello, I am calling regarding a {goal.lower()} for {customer_name}. Am I speaking with {business_name}?"
 
-    # The System Prompt is now more concise to prevent repetition and handle multilingual needs.
+    # REFINED SYSTEM PROMPT: Includes logic to ask for free slots if the primary is booked.
     system_prompt = f"""
-    You are a polite, professional AI assistant calling {business_name}.
-    Your specific goal is: {goal}.
-    Information to provide: {details}.
+    You are a polite, professional AI assistant calling {business_name} for {customer_name}.
+    GOAL: {goal}.
+    SPECIFIC REQUEST: {details}.
+    
+    STRATEGY:
+    1. Confirm you are speaking with the right business.
+    2. Ask for the specific date/time/service mentioned in the SPECIFIC REQUEST.
+    3. IF THE SLOT IS TAKEN: Do not end the call yet. Say: "I see. Since that time is booked, could you tell me what other slots you have available for this?"
+    4. GATHER INFO: Try to get at least 2-3 alternative free times from them.
+    5. WRAP UP: Once you have the alternative times, say: "Thank you, I will check these times with {customer_name} and we will call back to confirm."
     
     RULES:
-    1. Confirm you are speaking with the right business first.
-    2. Once confirmed, provide the booking details (date, time, service) immediately.
-    3. Keep responses very short (1-2 sentences max).
-    4. LANGUAGE MIRRORING: If the user speaks Hindi or Hinglish, switch and reply in natural Hindi/Hinglish.
-    5. When the goal is achieved (e.g., appointment booked), say goodbye and end the call.
-    6. Do not repeat your opening introduction once the conversation moves forward.
+    - Keep responses very short (1-2 sentences).
+    - If the user speaks Hindi/Hinglish, switch and reply in natural Hindi/Hinglish.
+    - Do not repeat your introduction.
     """
 
     vapi_payload = {
@@ -72,11 +70,11 @@ def start_call():
                 "provider": "openai",
                 "model": "gpt-4o-mini",
                 "messages": [{"role": "system", "content": system_prompt}],
-                "temperature": 0.7
+                "temperature": 0.5 # Lowered for better focus during negotiation
             },
             "voice": {
                 "provider": "11labs",
-                "voiceId": "bIHbv24MWmeRgasZH58o" # Premium multilingual voice
+                "voiceId": "bIHbv24MWmeRgasZH58o" 
             },
             "serverUrl": f"{BASE_URL}/vapi-webhook" 
         }
@@ -93,7 +91,6 @@ def start_call():
 
         if response.status_code == 201:
             vapi_call_id = response_data.get("id")
-            # Save session for the webhook
             call_sessions[vapi_call_id] = {"chat_id": chat_id}
             return jsonify({"status": "calling", "call_sid": vapi_call_id})
         else:
@@ -121,25 +118,34 @@ def vapi_webhook():
             chat_id = session["chat_id"]
             transcript = message_data.get("artifact", {}).get("transcript", "No transcript available.")
             
-            # Simple confirmation detection for the Telegram header
+            # DETECT SUCCESS OR NEGOTIATION
             t_lower = transcript.lower()
-            if any(word in t_lower for word in ["confirm", "booked", "appointment set", "thank you"]):
+            success_keywords = ["confirmed", "booked", "all set", "appointment is scheduled", "see you then"]
+            
+            if any(word in t_lower for word in success_keywords):
                 header = "✅ **Booking Confirmed!**"
+                instruction = "Your request was successful."
             else:
-                header = "📞 **Call Finished**"
+                header = "⚠️ **Slot Unavailable**"
+                instruction = "The requested time was taken. See the available slots mentioned in the transcript below to rebook."
 
-            summary = f"{header}\n\n**Transcript:**\n\n{transcript}\n\n"
-            summary += "────────────────\n🔄 Send /start for a new request."
+            summary = (
+                f"{header}\n\n"
+                f"{instruction}\n\n"
+                f"**Transcript:**\n{transcript}\n\n"
+                "────────────────\n🔄 Send /start to book a new free slot."
+            )
 
             if TELEGRAM_BOT_TOKEN:
                 telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                 requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
                 
-            # Clean up memory
             if vapi_call_id in call_sessions:
                 del call_sessions[vapi_call_id]
 
     return "OK", 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    # Note: Render uses the PORT environment variable
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
