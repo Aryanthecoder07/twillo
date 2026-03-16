@@ -8,73 +8,54 @@ app = Flask(__name__)
 # CREDENTIALS & SETUP
 # ============================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") 
-BASE_URL = os.environ.get("BASE_URL", "https://twillo-i353.onrender.com")
+BASE_URL = os.environ.get("BASE_URL") 
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 
-# In-memory storage to match Vapi Calls to Telegram Users
 call_sessions = {}
 
-# ============================================
-# ROUTE 1: ROOT (Keep-Alive)
-# ============================================
 @app.route("/")
 def home():
-    return "Vapi AI Calling Backend Running ✅"
+    return "AI Multi-Service Backend Running ✅"
 
-# ============================================
-# ROUTE 2: START THE CALL
-# ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
     data = request.json
-    
     phone_number = data.get("phone")
     chat_id = data.get("chat_id")
-    business_name = data.get("business_type", "the place")
+    business_name = data.get("business_name", "the business")
     goal = data.get("goal", "make an inquiry")
     details = data.get("details", {})
     customer_name = details.get("customer_name", "a customer")
 
-    # The AI introduces itself and immediately states the request.
-    opening_line = f"Hello, I am calling regarding a {goal.lower()} for {customer_name}. Am I speaking with {business_name}?"
+    # Detect if this is a follow-up Confirmation Call
+    is_confirmation = "confirm" in goal.lower()
 
-    # REFINED SYSTEM PROMPT: Includes logic to ask for free slots if the primary is booked.
-    system_prompt = f"""
-    You are a polite, professional AI assistant calling {business_name} for {customer_name}.
-    GOAL: {goal}.
-    SPECIFIC REQUEST: {details}.
-    
-    STRATEGY:
-    1. Confirm you are speaking with the right business.
-    2. Ask for the specific date/time/service mentioned in the SPECIFIC REQUEST.
-    3. IF THE SLOT IS TAKEN: Do not end the call yet. Say: "I see. Since that time is booked, could you tell me what other slots you have available for this?"
-    4. GATHER INFO: Try to get at least 2-3 alternative free times from them.
-    5. WRAP UP: Once you have the alternative times, say: "Thank you, I will check these times with {customer_name} and we will call back to confirm."
-    
-    RULES:
-    - Keep responses very short (1-2 sentences).
-    - If the user speaks Hindi/Hinglish, switch and reply in natural Hindi/Hinglish.
-    - Do not repeat your introduction.
-    """
+    if is_confirmation:
+        slot = details.get("slot_chosen", "the discussed time")
+        opening_line = f"Hello, I am calling back for {customer_name}. We would like to confirm the slot for {slot} that we just discussed. Is that still okay?"
+        system_prompt = f"You are confirming a booking for {customer_name} at {business_name} for the time: {slot}. If they say yes, say thank you and goodbye. If no, ask for one more time and end."
+    else:
+        opening_line = f"Hello, I am calling for {customer_name} regarding a {goal} for {business_name}. Am I speaking with the right person?"
+        system_prompt = f"""
+        You are a polite AI assistant calling {business_name} for {customer_name}.
+        GOAL: {goal}. DETAILS: {details}.
+        STRATEGY:
+        1. Ask for the specific slot in DETAILS.
+        2. IF TAKEN: Say: 'I see. Since that is booked, what other slots are available?'
+        3. GATHER INFO: Get alternative times, then say: 'I will check with {customer_name} and call back to confirm.'
+        4. Switch to Hindi/Hinglish if they do.
+        """
 
     vapi_payload = {
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
-        "customer": {
-            "number": phone_number
-        },
+        "customer": {"number": phone_number},
         "assistant": {
-            "name": "Booking Assistant",
             "firstMessage": opening_line,
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}],
-                "temperature": 0.5 # Lowered for better focus during negotiation
-            },
-            "voice": {
-                "provider": "11labs",
-                "voiceId": "bIHbv24MWmeRgasZH58o" 
+                "messages": [{"role": "system", "content": system_prompt}]
             },
             "serverUrl": f"{BASE_URL}/vapi-webhook" 
         }
@@ -84,68 +65,59 @@ def start_call():
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers={"Authorization": f"Bearer {VAPI_API_KEY}"},
-            json=vapi_payload,
-            timeout=30
+            json=vapi_payload
         )
-        response_data = response.json()
-
         if response.status_code == 201:
-            vapi_call_id = response_data.get("id")
-            call_sessions[vapi_call_id] = {"chat_id": chat_id}
-            return jsonify({"status": "calling", "call_sid": vapi_call_id})
-        else:
-            print(f"🚨 Vapi API Error: {response_data}", flush=True)
-            return jsonify({"error": "Failed to start Vapi call"}), 500
-
+            call_id = response.json().get("id")
+            # Store data to remember this session in the webhook
+            call_sessions[call_id] = {
+                "chat_id": chat_id, 
+                "phone": phone_number, 
+                "business_name": business_name,
+                "customer_name": customer_name
+            }
+            return jsonify({"status": "calling", "call_id": call_id})
+        return jsonify({"error": "Vapi Error"}), 500
     except Exception as e:
-        print(f"🚨 Connection Error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
 
-
-# ============================================
-# ROUTE 3: VAPI WEBHOOK (The Final Receipt)
-# ============================================
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
     data = request.json
-    message_data = data.get("message", {})
+    msg = data.get("message", {})
     
-    if message_data.get("type") == "end-of-call-report":
-        vapi_call_id = message_data.get("call", {}).get("id")
-        session = call_sessions.get(vapi_call_id)
+    if msg.get("type") == "end-of-call-report":
+        call_id = msg.get("call", {}).get("id")
+        session = call_sessions.get(call_id)
+        if not session: return "OK", 200
+
+        chat_id = session["chat_id"]
+        transcript = msg.get("artifact", {}).get("transcript", "No transcript available.")
+        reason = msg.get("endedReason")
+        t_low = transcript.lower()
+
+        # Outcome 1: NO ANSWER
+        if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
+            text = "🚫 **Business is not picking up calls.**\nPlease try again later."
         
-        if session:
-            chat_id = session["chat_id"]
-            transcript = message_data.get("artifact", {}).get("transcript", "No transcript available.")
-            
-            # DETECT SUCCESS OR NEGOTIATION
-            t_lower = transcript.lower()
-            success_keywords = ["confirmed", "booked", "all set", "appointment is scheduled", "see you then"]
-            
-            if any(word in t_lower for word in success_keywords):
-                header = "✅ **Booking Confirmed!**"
-                instruction = "Your request was successful."
-            else:
-                header = "⚠️ **Slot Unavailable**"
-                instruction = "The requested time was taken. See the available slots mentioned in the transcript below to rebook."
+        # Outcome 2: CONFIRMED
+        elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
+            text = f"✅ **Booking Confirmed!**\n\n**Transcript:**\n{transcript}"
 
-            summary = (
-                f"{header}\n\n"
-                f"{instruction}\n\n"
-                f"**Transcript:**\n{transcript}\n\n"
-                "────────────────\n🔄 Send /start to book a new free slot."
-            )
+        # Outcome 3: SLOT FILLED / ALTERNATIVES
+        else:
+            text = (f"⚠️ **Slot Filled**\n\nThe business suggested these alternatives:\n\n"
+                    f"**Transcript:**\n{transcript}\n\n"
+                    "────────────────\n"
+                    "1. Type the **new time** to send a confirmation call.\n"
+                    "2. Send /exit to cancel.")
 
-            if TELEGRAM_BOT_TOKEN:
-                telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                requests.post(telegram_url, json={"chat_id": chat_id, "text": summary})
-                
-            if vapi_call_id in call_sessions:
-                del call_sessions[vapi_call_id]
+        requests.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage", 
+                      json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        
+        if call_id in call_sessions: del call_sessions[call_id]
 
     return "OK", 200
 
 if __name__ == "__main__":
-    # Note: Render uses the PORT environment variable
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
