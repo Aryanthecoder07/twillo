@@ -74,8 +74,8 @@ def start_call():
                 "messages": [{"role": "system", "content": system_prompt}],
                 "temperature": 0.3
             },
-            "voice": "jennifer-playht",
-            "serverUrl": webhook_url        # must be inside assistant, not top-level
+            "voice": "sarah-11labs",         # reliable OpenAI voice, no synthesis issues
+            "serverUrl": webhook_url
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
@@ -103,6 +103,7 @@ def start_call():
             res_data = response.json()
             call_id = res_data.get("id")
             call_sessions[call_id] = {"chat_id": chat_id, "phone": phone_number}
+            print(f"DEBUG: Call started. call_id={call_id}, chat_id={chat_id}")
             return jsonify({"status": "calling", "call_id": call_id})
         else:
             return jsonify({"error": "Vapi Error", "vapi_response": response.json()}), response.status_code
@@ -118,41 +119,74 @@ def start_call():
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
     data = request.json
-    msg = data.get("message", {})
 
-    if msg.get("type") == "end-of-call-report":
-        call_id = msg.get("call", {}).get("id")
-        session = call_sessions.get(call_id)
+    print(f"DEBUG WEBHOOK RAW: {data}")
 
-        if session:
-            chat_id = session["chat_id"]
-            transcript = msg.get("artifact", {}).get("transcript", "No transcript available.")
-            reason = msg.get("endedReason")
-            t_low = transcript.lower()
+    if not data:
+        print("DEBUG WEBHOOK: received empty body")
+        return "OK", 200
 
-            # 1. NO ANSWER
-            if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
-                text = "🚫 **Business is not picking up calls.**\nPlease try again later."
+    # Handle both structures: type at top level or nested under message
+    if data.get("type") == "end-of-call-report":
+        msg = data
+    elif data.get("message", {}).get("type") == "end-of-call-report":
+        msg = data.get("message", {})
+    else:
+        print(f"DEBUG WEBHOOK: not an end-of-call-report, ignoring.")
+        return "OK", 200
 
-            # 2. CONFIRMED
-            elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
-                text = f"✅ **Booking Confirmed!**\n\n**Transcript:**\n{transcript}"
+    call_id = msg.get("call", {}).get("id")
+    print(f"DEBUG WEBHOOK: call_id={call_id}, active sessions={list(call_sessions.keys())}")
 
-            # 3. SLOT FILLED / ALTERNATIVES
-            else:
-                text = (f"⚠️ **Slot Filled**\n\nThe business suggested these alternatives:\n\n"
-                        f"**Transcript:**\n{transcript}\n\n"
-                        "────────────────\n"
-                        "Reply with the **new time** to send a confirmation call, or send /exit.")
+    session = call_sessions.get(call_id)
+    if not session:
+        print(f"DEBUG WEBHOOK: no session found for call_id={call_id}")
+        return "OK", 200
 
-            # Send result to Telegram
-            if TELEGRAM_BOT_TOKEN:
-                tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-                requests.post(tg_url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+    chat_id = session["chat_id"]
+    transcript = msg.get("artifact", {}).get("transcript", "").strip()
+    reason = msg.get("endedReason", "")
+    t_low = transcript.lower()
 
-            # Clean up session
-            if call_id in call_sessions:
-                del call_sessions[call_id]
+    print(f"DEBUG WEBHOOK: endedReason={reason}, transcript length={len(transcript)}")
+
+    # 1. NO ANSWER
+    if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
+        text = "🚫 *Business is not picking up calls.*\nPlease try again later."
+
+    # 2. EMPTY TRANSCRIPT — call connected but AI was silent (voice/model issue)
+    elif not transcript:
+        text = (
+            f"⚠️ *Call connected but no conversation recorded.*\n\n"
+            f"Ended reason: `{reason}`\n\n"
+            "This usually means the AI could not speak. Please try again with /start."
+        )
+
+    # 3. CONFIRMED
+    elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
+        text = f"✅ *Booking Confirmed!*\n\n*Transcript:*\n{transcript}"
+
+    # 4. SLOT FILLED / ALTERNATIVES
+    else:
+        text = (
+            f"⚠️ *Slot Filled*\n\nThe business suggested these alternatives:\n\n"
+            f"*Transcript:*\n{transcript}\n\n"
+            "────────────────\n"
+            "Reply with the *new time* to send a confirmation call, or send /exit."
+        )
+
+    # Send result to Telegram
+    if TELEGRAM_BOT_TOKEN:
+        tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        tg_response = requests.post(
+            tg_url,
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+        )
+        print(f"DEBUG WEBHOOK: Telegram response={tg_response.status_code}")
+
+    # Clean up session
+    if call_id in call_sessions:
+        del call_sessions[call_id]
 
     return "OK", 200
 
