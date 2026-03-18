@@ -10,8 +10,8 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
-# Ensure BASE_URL does NOT have a trailing slash
-BASE_URL = os.environ.get("BASE_URL", "").rstrip('/')
+# Example: https://twillo-i353.onrender.com  (NO trailing slash)
+BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 # In-memory storage for session tracking
 call_sessions = {}
@@ -33,6 +33,11 @@ def start_call():
     if not data:
         return jsonify({"error": "No data received"}), 400
 
+    # Guard: BASE_URL must be set correctly in Render env vars
+    if not BASE_URL or not BASE_URL.startswith("https://"):
+        print(f"ERROR: BASE_URL is invalid or missing: '{BASE_URL}'")
+        return jsonify({"error": "BASE_URL env var not set correctly on Render. It must start with https://"}), 500
+
     phone_number = data.get("phone")
     chat_id = data.get("chat_id")
     business_name = data.get("business_name", "the business")
@@ -40,9 +45,12 @@ def start_call():
     details = data.get("details", {})
     customer_name = details.get("customer_name", "a customer")
 
+    webhook_url = f"{BASE_URL}/vapi-webhook"
+    print(f"DEBUG: webhook_url = {webhook_url}")
+
     # Logic to switch between Inquiry and Confirmation calls
     is_confirmation = "confirm" in str(goal).lower()
-    
+
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
         opening_line = f"Hello, I am calling back for {customer_name}. We would like to confirm the slot for {slot}. Is that still available?"
@@ -66,8 +74,8 @@ def start_call():
                 "messages": [{"role": "system", "content": system_prompt}],
                 "temperature": 0.3
             },
-            "voice": "jennifer-playht",         # FIX: valid Vapi voice string
-            "serverUrl": f"{BASE_URL}/vapi-webhook"  # FIX: moved inside assistant, not top-level
+            "voice": "jennifer-playht",
+            "serverUrl": webhook_url        # must be inside assistant, not top-level
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
@@ -80,7 +88,7 @@ def start_call():
             "Authorization": f"Bearer {VAPI_API_KEY}",
             "Content-Type": "application/json"
         }
-        
+
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers=headers,
@@ -88,7 +96,6 @@ def start_call():
             timeout=20
         )
 
-        # CRITICAL LOGGING: Check your Render logs for these outputs
         print(f"Vapi Status Code: {response.status_code}")
         print(f"Vapi Response JSON: {response.text}")
 
@@ -104,6 +111,7 @@ def start_call():
         print(f"Server Exception: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
 # ============================================
 # ROUTE: WEBHOOK FOR RESULTS
 # ============================================
@@ -111,11 +119,11 @@ def start_call():
 def vapi_webhook():
     data = request.json
     msg = data.get("message", {})
-    
+
     if msg.get("type") == "end-of-call-report":
         call_id = msg.get("call", {}).get("id")
         session = call_sessions.get(call_id)
-        
+
         if session:
             chat_id = session["chat_id"]
             transcript = msg.get("artifact", {}).get("transcript", "No transcript available.")
@@ -125,12 +133,12 @@ def vapi_webhook():
             # 1. NO ANSWER
             if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
                 text = "🚫 **Business is not picking up calls.**\nPlease try again later."
-            
+
             # 2. CONFIRMED
             elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
                 text = f"✅ **Booking Confirmed!**\n\n**Transcript:**\n{transcript}"
 
-            # 3. SLOT FILLED / ALTERNATIVES (Triggers bot.py waiting state)
+            # 3. SLOT FILLED / ALTERNATIVES
             else:
                 text = (f"⚠️ **Slot Filled**\n\nThe business suggested these alternatives:\n\n"
                         f"**Transcript:**\n{transcript}\n\n"
@@ -141,12 +149,13 @@ def vapi_webhook():
             if TELEGRAM_BOT_TOKEN:
                 tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
                 requests.post(tg_url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
-            
+
             # Clean up session
             if call_id in call_sessions:
-                del call_sessions[call_id]  # FIX: was split across two lines
+                del call_sessions[call_id]
 
     return "OK", 200
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
