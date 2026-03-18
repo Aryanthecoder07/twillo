@@ -20,6 +20,10 @@ call_sessions = {}
 def home():
     return "Vapi Calling Backend: Online ✅"
 
+@app.route("/health")
+def health():
+    return "OK", 200
+
 # ============================================
 # ROUTE: START THE CALL
 # ============================================
@@ -62,13 +66,13 @@ def start_call():
                 "messages": [{"role": "system", "content": system_prompt}],
                 "temperature": 0.3
             },
-            "voice": "jennifer-soft" 
+            "voice": "jennifer-playht",         # FIX: valid Vapi voice string
+            "serverUrl": f"{BASE_URL}/vapi-webhook"  # FIX: moved inside assistant, not top-level
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
             "number": phone_number
-        },
-        "serverUrl": f"{BASE_URL}/vapi-webhook"
+        }
     }
 
     try:
@@ -140,7 +144,7 @@ def vapi_webhook():
             
             # Clean up session
             if call_id in call_sessions:
-                del call_sessions[call_id]
+                del call_sessions[call_id]  # FIX: was split across two lines
 
     return "OK", 200
 
