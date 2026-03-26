@@ -4,15 +4,11 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ============================================
-# CREDENTIALS (Set these in Render Env Vars)
-# ============================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
-# In-memory storage for session tracking
 call_sessions = {}
 
 @app.route("/")
@@ -23,9 +19,6 @@ def home():
 def health():
     return "OK", 200
 
-# ============================================
-# ROUTE: START THE CALL
-# ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
     data = request.json
@@ -48,20 +41,14 @@ def start_call():
 
     is_confirmation = "confirm" in str(goal).lower()
 
-    # ============================================
-    # LANGUAGE-AWARE SYSTEM PROMPTS
-    # ============================================
     language_instruction = (
-        "\n\n## CRITICAL LANGUAGE RULES:\n"
-        "1. DETECT the language the other person is speaking within their FIRST sentence.\n"
-        "2. IMMEDIATELY switch to that SAME language for ALL your responses.\n"
-        "3. If they speak Hindi, reply ONLY in Hindi.\n"
-        "4. If they speak Tamil, reply in Tamil. Marathi → Marathi. Punjabi → Punjabi. Etc.\n"
-        "5. If they mix Hindi and English (Hinglish), match that style.\n"
-        "6. NEVER keep speaking English if the other person has switched to another language.\n"
-        "7. Use natural, colloquial phrasing — not formal textbook translations.\n"
-        "8. Your opening line is in English. After the FIRST reply from the other person, "
-        "adapt to THEIR language completely.\n"
+        "\n\nCRITICAL LANGUAGE RULES: "
+        "1. Detect the language the other person speaks in their first sentence. "
+        "2. Immediately switch to that same language for all responses. "
+        "3. If they speak Hindi, reply only in Hindi. "
+        "4. If they mix Hindi-English, match that Hinglish style. "
+        "5. Never keep speaking English if they switched to another language. "
+        "6. Use natural colloquial phrasing, not textbook translations."
     )
 
     if is_confirmation:
@@ -72,8 +59,7 @@ def start_call():
         )
         system_prompt = (
             f"You are confirming a booking for {customer_name} at {business_name} for {slot}. "
-            "Keep it brief and polite."
-            + language_instruction
+            "Keep it brief." + language_instruction
         )
     else:
         opening_line = (
@@ -81,34 +67,16 @@ def start_call():
             "Am I speaking with the right place?"
         )
         system_prompt = (
-            f"You are a polite assistant calling on behalf of {customer_name}. "
-            f"Goal: {goal}. Details: {details}. "
+            f"You are a polite assistant for {customer_name}. Goal: {goal}. Details: {details}. "
             "If the requested slot is taken, ask for 2-3 alternative available times. "
             "Once you have alternatives, say you will check with the customer and call back."
             + language_instruction
         )
 
     # ============================================
-    # MULTILINGUAL VOICE — OpenAI (no extra API key needed)
-    # ============================================
-    voice_config = {
-        "provider": "openai",
-        "voiceId": "shimmer"
-    }
-
-    # ============================================
-    # MULTILINGUAL TRANSCRIBER
-    # ============================================
-    transcriber_config = {
-        "provider": "deepgram",
-        "model": "nova-2",
-        "language": "multi",
-        "smartFormat": True,
-        "languageDetectionEnabled": True
-    }
-
-    # ============================================
-    # VAPI PAYLOAD
+    # ONLY 2 CHANGES FROM YOUR ORIGINAL CODE:
+    # 1. Voice changed to OpenAI shimmer
+    # 2. Language instruction added to prompt
     # ============================================
     vapi_payload = {
         "assistant": {
@@ -119,12 +87,11 @@ def start_call():
                 "messages": [{"role": "system", "content": system_prompt}],
                 "temperature": 0.3
             },
-            "voice": voice_config,
-            "transcriber": transcriber_config,
-            "serverUrl": webhook_url,
-            "silenceTimeoutSeconds": 15,
-            "responseDelaySeconds": 0.5,
-            "backchannelingEnabled": True,
+            "voice": {
+                "provider": "openai",
+                "voiceId": "shimmer"
+            },
+            "serverUrl": webhook_url
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
@@ -165,16 +132,12 @@ def start_call():
         return jsonify({"error": str(e)}), 500
 
 
-# ============================================
-# ROUTE: WEBHOOK FOR RESULTS
-# ============================================
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
     data = request.json
     print(f"DEBUG WEBHOOK RAW: {data}")
 
     if not data:
-        print("DEBUG WEBHOOK: received empty body")
         return "OK", 200
 
     if data.get("type") == "end-of-call-report":
@@ -182,15 +145,11 @@ def vapi_webhook():
     elif data.get("message", {}).get("type") == "end-of-call-report":
         msg = data.get("message", {})
     else:
-        print(f"DEBUG WEBHOOK: not an end-of-call-report, ignoring.")
         return "OK", 200
 
     call_id = msg.get("call", {}).get("id")
-    print(f"DEBUG WEBHOOK: call_id={call_id}, sessions={list(call_sessions.keys())}")
-
     session = call_sessions.get(call_id)
     if not session:
-        print(f"DEBUG WEBHOOK: no session found for call_id={call_id}")
         return "OK", 200
 
     chat_id = session["chat_id"]
@@ -198,37 +157,26 @@ def vapi_webhook():
     reason = msg.get("endedReason", "")
     t_low = transcript.lower()
 
-    print(f"DEBUG WEBHOOK: endedReason={reason}, transcript length={len(transcript)}")
-
     if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
         text = "🚫 *Business is not picking up calls.*\nPlease try again later."
-
     elif not transcript:
         text = (
             f"⚠️ *Call connected but no conversation recorded.*\n\n"
             f"Ended reason: `{reason}`\n\n"
-            "This usually means the AI could not speak. Please try again with /start."
+            "Please try again with /start."
         )
-
-    elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled",
-                                     "पक्का", "बुक", "कन्फर्म"]):
+    elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
         text = f"✅ *Booking Confirmed!*\n\n*Transcript:*\n{transcript}"
-
     else:
         text = (
-            f"⚠️ *Slot Filled*\n\nThe business suggested alternatives:\n\n"
+            f"⚠️ *Slot Filled*\n\nAlternatives suggested:\n\n"
             f"*Transcript:*\n{transcript}\n\n"
-            "────────────────\n"
-            "Reply with the *new time* for a confirmation call, or /exit."
+            "Reply with *new time* or /exit."
         )
 
     if TELEGRAM_BOT_TOKEN:
         tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        tg_response = requests.post(
-            tg_url,
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-        )
-        print(f"DEBUG WEBHOOK: Telegram response={tg_response.status_code}")
+        requests.post(tg_url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
 
     if call_id in call_sessions:
         del call_sessions[call_id]
