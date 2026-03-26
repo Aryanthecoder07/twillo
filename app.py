@@ -7,6 +7,7 @@ app = Flask(__name__)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 call_sessions = {}
@@ -18,6 +19,79 @@ def home():
 @app.route("/health")
 def health():
     return "OK", 200
+
+
+# ============================================
+# AI TRANSCRIPT ANALYZER (GROQ — FREE)
+# ============================================
+def analyze_transcript(transcript):
+    """Send transcript to Groq LLaMA 3.1 8B and get verdict."""
+    if not GROQ_API_KEY:
+        print("ERROR: GROQ_API_KEY not set")
+        return "UNKNOWN", "Could not analyze — missing API key.", ""
+
+    prompt = f"""You are analyzing a phone call transcript between an AI assistant and a business.
+The AI was calling to make or confirm a booking.
+
+TRANSCRIPT:
+{transcript}
+
+Based on this transcript, answer these 3 things in EXACTLY this format:
+
+STATUS: <one of: CONFIRMED / REJECTED / ALTERNATIVES_OFFERED / NO_CLEAR_OUTCOME>
+SUMMARY: <1-2 sentence summary of what happened in the call, in English>
+ALTERNATIVES: <if any alternative times/slots were offered, list them. Otherwise write NONE>
+
+Rules:
+- If the business said yes/okay/available/confirmed in ANY language → STATUS: CONFIRMED
+- If the business said no/not available/full and gave other options → STATUS: ALTERNATIVES_OFFERED
+- If the business flatly refused with no alternatives → STATUS: REJECTED
+- If the conversation was unclear or got cut off → STATUS: NO_CLEAR_OUTCOME
+- Understand Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Punjabi, Gujarati, Urdu and their transliterations
+- Even if transcript is garbled or mixed language, try your best to understand the intent
+"""
+
+    try:
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0
+            },
+            timeout=15
+        )
+
+        if response.status_code == 200:
+            result = response.json()["choices"][0]["message"]["content"].strip()
+            print(f"DEBUG GROQ ANALYSIS: {result}")
+
+            status = "UNKNOWN"
+            summary = ""
+            alternatives = ""
+
+            for line in result.split("\n"):
+                line = line.strip()
+                if line.upper().startswith("STATUS:"):
+                    status = line.split(":", 1)[1].strip().upper()
+                elif line.upper().startswith("SUMMARY:"):
+                    summary = line.split(":", 1)[1].strip()
+                elif line.upper().startswith("ALTERNATIVES:"):
+                    alternatives = line.split(":", 1)[1].strip()
+
+            return status, summary, alternatives
+        else:
+            print(f"Groq Error: {response.status_code} {response.text}")
+            return "UNKNOWN", "AI analysis failed.", ""
+
+    except Exception as e:
+        print(f"Groq Exception: {str(e)}")
+        return "UNKNOWN", "AI analysis failed.", ""
+
 
 @app.route("/start-call", methods=["POST"])
 def start_call():
@@ -45,8 +119,8 @@ def start_call():
         "\n\nCRITICAL LANGUAGE RULES: "
         "1. Detect the language the other person speaks in their first sentence. "
         "2. Immediately switch to that same language for all responses. "
-        "3. If they speak Hindi, reply only in Hindi. "
-        "4. If they mix Hindi-English, match that Hinglish style. "
+        "3. If they speak Hindi, reply only in Hindi. Tamil → Tamil. Telugu → Telugu. "
+        "4. If they mix languages, match that style. "
         "5. Never keep speaking English if they switched to another language. "
         "6. Use natural colloquial phrasing, not textbook translations."
     )
@@ -59,7 +133,8 @@ def start_call():
         )
         system_prompt = (
             f"You are confirming a booking for {customer_name} at {business_name} for {slot}. "
-            "Keep it brief." + language_instruction
+            "Keep it brief."
+            + language_instruction
         )
     else:
         opening_line = (
@@ -73,11 +148,6 @@ def start_call():
             + language_instruction
         )
 
-    # ============================================
-    # ONLY 2 CHANGES FROM YOUR ORIGINAL CODE:
-    # 1. Voice changed to OpenAI shimmer
-    # 2. Language instruction added to prompt
-    # ============================================
     vapi_payload = {
         "assistant": {
             "firstMessage": opening_line,
@@ -155,24 +225,59 @@ def vapi_webhook():
     chat_id = session["chat_id"]
     transcript = msg.get("artifact", {}).get("transcript", "").strip()
     reason = msg.get("endedReason", "")
-    t_low = transcript.lower()
+
+    print(f"DEBUG WEBHOOK: endedReason={reason}, transcript={transcript}")
 
     if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
         text = "🚫 *Business is not picking up calls.*\nPlease try again later."
+
     elif not transcript:
         text = (
             f"⚠️ *Call connected but no conversation recorded.*\n\n"
             f"Ended reason: `{reason}`\n\n"
             "Please try again with /start."
         )
-    elif any(x in t_low for x in ["confirmed", "booked", "all set", "scheduled"]):
-        text = f"✅ *Booking Confirmed!*\n\n*Transcript:*\n{transcript}"
+
     else:
-        text = (
-            f"⚠️ *Slot Filled*\n\nAlternatives suggested:\n\n"
-            f"*Transcript:*\n{transcript}\n\n"
-            "Reply with *new time* or /exit."
-        )
+        # ============================================
+        # AI ANALYZES TRANSCRIPT (Groq — FREE)
+        # ============================================
+        status, summary, alternatives = analyze_transcript(transcript)
+
+        if status == "CONFIRMED":
+            text = (
+                f"✅ *Booking Confirmed!*\n\n"
+                f"📋 *Summary:* {summary}\n\n"
+                f"*Full Transcript:*\n{transcript}"
+            )
+
+        elif status == "ALTERNATIVES_OFFERED":
+            alt_text = f"\n📌 *Alternatives:* {alternatives}" if alternatives and alternatives != "NONE" else ""
+            text = (
+                f"⚠️ *Requested slot not available*\n\n"
+                f"📋 *Summary:* {summary}{alt_text}\n\n"
+                f"*Full Transcript:*\n{transcript}\n\n"
+                "────────────────\n"
+                "Reply with the *new time* to confirm, or /exit."
+            )
+
+        elif status == "REJECTED":
+            text = (
+                f"❌ *Booking Rejected*\n\n"
+                f"📋 *Summary:* {summary}\n\n"
+                f"*Full Transcript:*\n{transcript}\n\n"
+                "────────────────\n"
+                "Try a different business or time with /start."
+            )
+
+        else:
+            text = (
+                f"📞 *Call Completed*\n\n"
+                f"📋 *Summary:* {summary}\n\n"
+                f"*Full Transcript:*\n{transcript}\n\n"
+                "────────────────\n"
+                "Reply with *new time* or /exit."
+            )
 
     if TELEGRAM_BOT_TOKEN:
         tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
