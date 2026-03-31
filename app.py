@@ -12,9 +12,11 @@ BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 call_sessions = {}
 
+
 @app.route("/")
 def home():
     return "Vapi Calling Backend: Online ✅"
+
 
 @app.route("/health")
 def health():
@@ -117,12 +119,26 @@ def start_call():
 
     language_instruction = (
         "\n\nCRITICAL LANGUAGE RULES: "
-        "1. Detect the language the other person speaks in their first sentence. "
+        "1. Detect the language the other person speaks in their first real sentence. "
         "2. Immediately switch to that same language for all responses. "
         "3. If they speak Hindi, reply only in Hindi. Tamil → Tamil. Telugu → Telugu. "
-        "4. If they mix languages, match that style. "
-        "5. Never keep speaking English if they switched to another language. "
+        "4. If they mix languages, match that style naturally. "
+        "5. Never keep speaking English if they switched to another language, unless you are interacting with an automated phone system or IVR. "
         "6. Use natural colloquial phrasing, not textbook translations."
+    )
+
+    call_behavior_instruction = (
+        "\n\nCALL BEHAVIOR RULES: "
+        "1. If the call is placed on hold, remain silent and wait patiently for the human to return. "
+        "2. Do not hang up because of hold music, ringing, silence, or transfer announcements. "
+        "3. If you reach an IVR, phone menu, automated system, or recorded voice, always try to connect to a human. "
+        "4. Always choose any valid option for operator, representative, receptionist, front desk, staff, or human assistance. "
+        "5. If the automated system asks for language preference, always choose English. "
+        "6. While interacting with an IVR, automated system, voicemail tree, or calling program, continue in English. "
+        "7. If multiple options are given, prioritize: human/operator/reception/front desk > appointments/reservations/bookings > all other options. "
+        "8. Do not get stuck repeating long sentences to the IVR; use short clear responses like 'English', 'operator', 'representative', 'reception', or the valid keypad/menu option. "
+        "9. Once a human answers, resume the normal conversation and switch to the human's language if they speak another language. "
+        "10. If transferred, stay on the line and continue patiently until connected."
     )
 
     if is_confirmation:
@@ -133,8 +149,10 @@ def start_call():
         )
         system_prompt = (
             f"You are confirming a booking for {customer_name} at {business_name} for {slot}. "
-            "Keep it brief."
+            "Keep it brief and polite. Confirm availability clearly. "
+            "If the slot is not available, ask for 2-3 alternative available times and say you will check with the customer and call back."
             + language_instruction
+            + call_behavior_instruction
         )
     else:
         opening_line = (
@@ -146,6 +164,7 @@ def start_call():
             "If the requested slot is taken, ask for 2-3 alternative available times. "
             "Once you have alternatives, say you will check with the customer and call back."
             + language_instruction
+            + call_behavior_instruction
         )
 
     vapi_payload = {
@@ -154,7 +173,12 @@ def start_call():
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}],
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    }
+                ],
                 "temperature": 0.3
             },
             "voice": {
@@ -192,9 +216,14 @@ def start_call():
             print(f"DEBUG: Call started. call_id={call_id}, chat_id={chat_id}")
             return jsonify({"status": "calling", "call_id": call_id})
         else:
+            try:
+                error_data = response.json()
+            except Exception:
+                error_data = {"raw": response.text}
+
             return jsonify({
                 "error": "Vapi Error",
-                "vapi_response": response.json()
+                "vapi_response": error_data
             }), response.status_code
 
     except Exception as e:
@@ -239,9 +268,6 @@ def vapi_webhook():
         )
 
     else:
-        # ============================================
-        # AI ANALYZES TRANSCRIPT (Groq — FREE)
-        # ============================================
         status, summary, alternatives = analyze_transcript(transcript)
 
         if status == "CONFIRMED":
@@ -281,7 +307,18 @@ def vapi_webhook():
 
     if TELEGRAM_BOT_TOKEN:
         tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        requests.post(tg_url, json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        try:
+            requests.post(
+                tg_url,
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "Markdown"
+                },
+                timeout=15
+            )
+        except Exception as e:
+            print(f"Telegram send error: {str(e)}")
 
     if call_id in call_sessions:
         del call_sessions[call_id]
