@@ -95,6 +95,9 @@ Rules:
         return "UNKNOWN", "AI analysis failed.", ""
 
 
+# ============================================
+# START CALL ENDPOINT
+# ============================================
 @app.route("/start-call", methods=["POST"])
 def start_call():
     data = request.json
@@ -141,6 +144,20 @@ def start_call():
         "10. If transferred, stay on the line and continue patiently until connected."
     )
 
+    silence_and_hold_instruction = (
+        "\n\nSILENCE AND HOLD HANDLING RULES: "
+        "1. If there is silence, DO NOT hang up. Wait patiently. "
+        "2. If silence lasts more than 15 seconds, say 'Hello? Are you still there?' ONCE. "
+        "3. After that, wait silently for at least another 45 seconds before considering the call dropped. "
+        "4. Hold music, background noise, ringing tones, or muffled sounds mean the call is still active — keep waiting and DO NOT speak. "
+        "5. Never say goodbye or end the call just because of a pause or hold. "
+        "6. If you hear 'please hold' or 'one moment' or 'wait' in ANY language, remain completely silent and wait indefinitely. "
+        "7. If transferred to another person or department, wait patiently for the new person to speak first. "
+        "8. Do NOT repeatedly ask 'are you there?' — ask only ONCE after 15 seconds of true silence (no music, no noise). "
+        "9. If hold music is playing, do NOT speak at all — just wait silently until a human voice returns. "
+        "10. Consider the call dropped ONLY if there is absolute dead silence (no sound at all) for more than 60 seconds."
+    )
+
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
         opening_line = (
@@ -153,6 +170,7 @@ def start_call():
             "If the slot is not available, ask for 2-3 alternative available times and say you will check with the customer and call back."
             + language_instruction
             + call_behavior_instruction
+            + silence_and_hold_instruction
         )
     else:
         opening_line = (
@@ -165,6 +183,7 @@ def start_call():
             "Once you have alternatives, say you will check with the customer and call back."
             + language_instruction
             + call_behavior_instruction
+            + silence_and_hold_instruction
         )
 
     vapi_payload = {
@@ -185,7 +204,30 @@ def start_call():
                 "provider": "openai",
                 "voiceId": "shimmer"
             },
-            "serverUrl": webhook_url
+            "serverUrl": webhook_url,
+
+            # ===== PREVENT EARLY HANGUP — SILENCE & HOLD PROTECTION =====
+            "silenceTimeoutSeconds": 120,          # Wait 2 minutes of dead silence before disconnecting
+            "maxDurationSeconds": 600,             # Allow calls up to 10 minutes (for long holds)
+            "responseDelaySeconds": 1.5,           # Wait 1.5s before responding to avoid interrupting
+            "numWordsToInterruptAssistant": 2,     # Human needs 2+ words to interrupt AI
+            "backgroundSound": "off",              # No fake background noise
+            "backchannel": False,                  # No filler sounds (mm-hmm) during silence/hold
+
+            # Voicemail detection
+            "voicemailDetection": {
+                "enabled": True,
+                "provider": "vapi"
+            },
+
+            # Transport / ring timeout
+            "transportConfigurations": [
+                {
+                    "provider": "twilio",
+                    "timeout": 60,                 # Ring for 60s before giving up
+                    "record": False
+                }
+            ]
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
@@ -231,6 +273,9 @@ def start_call():
         return jsonify({"error": str(e)}), 500
 
 
+# ============================================
+# VAPI WEBHOOK — END OF CALL REPORT
+# ============================================
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
     data = request.json
@@ -326,6 +371,9 @@ def vapi_webhook():
     return "OK", 200
 
 
+# ============================================
+# RUN SERVER
+# ============================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
