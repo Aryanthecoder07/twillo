@@ -207,24 +207,17 @@ def start_call():
             "serverUrl": webhook_url,
 
             # ===== PREVENT EARLY HANGUP — SILENCE & HOLD PROTECTION =====
-            "silenceTimeoutSeconds": 120,          # Wait 2 minutes of dead silence before disconnecting
-            "maxDurationSeconds": 600,             # Allow calls up to 10 minutes (for long holds)
-            "responseDelaySeconds": 1.5,           # Wait 1.5s before responding to avoid interrupting
-            "numWordsToInterruptAssistant": 2,     # Human needs 2+ words to interrupt AI
-            "backgroundSound": "off",              # No fake background noise
-            "backchannel": False,                  # No filler sounds (mm-hmm) during silence/hold
-
-            # Voicemail detection
-            "voicemailDetection": {
-                "enabled": True,
-                "provider": "vapi"
-            },
+            "silenceTimeoutSeconds": 120,
+            "maxDurationSeconds": 600,
+            "responseDelaySeconds": 1.5,
+            "numWordsToInterruptAssistant": 2,
+            "backgroundSound": "off",
 
             # Transport / ring timeout
             "transportConfigurations": [
                 {
                     "provider": "twilio",
-                    "timeout": 60,                 # Ring for 60s before giving up
+                    "timeout": 60,
                     "record": False
                 }
             ]
