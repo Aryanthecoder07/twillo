@@ -151,11 +151,15 @@ def start_call():
         "3. After that, wait silently for at least another 45 seconds before considering the call dropped. "
         "4. Hold music, background noise, ringing tones, or muffled sounds mean the call is still active — keep waiting and DO NOT speak. "
         "5. Never say goodbye or end the call just because of a pause or hold. "
-        "6. If you hear 'please hold' or 'one moment' or 'wait' in ANY language, remain completely silent and wait indefinitely. "
-        "7. If transferred to another person or department, wait patiently for the new person to speak first. "
+        "6. If you hear 'please hold' or 'one moment' or 'wait' or 'please wait' or 'connecting you' or 'transferring' in ANY language, remain COMPLETELY SILENT and wait for a real human to greet you. "
+        "7. If transferred to another person or department, wait patiently for the new person to speak first. DO NOT start talking until the new person says hello or greets you. "
         "8. Do NOT repeatedly ask 'are you there?' — ask only ONCE after 15 seconds of true silence (no music, no noise). "
         "9. If hold music is playing, do NOT speak at all — just wait silently until a human voice returns. "
-        "10. Consider the call dropped ONLY if there is absolute dead silence (no sound at all) for more than 60 seconds."
+        "10. Consider the call dropped ONLY if there is absolute dead silence (no sound at all) for more than 60 seconds. "
+        "11. CRITICAL: When an automated system says 'please wait while we connect you' or similar, DO NOT start your booking request. Stay COMPLETELY SILENT until a REAL HUMAN greets you with something like 'hello', 'hi', 'how can I help you', etc. "
+        "12. You can tell the difference between an automated message and a real human: automated messages are pre-recorded and say things like 'please wait', 'your call is important', 'connecting you'. A real human will greet you personally or ask how they can help. "
+        "13. After hearing any transfer/hold message, wait at least 5-10 seconds of silence before assuming a human has answered. "
+        "14. If the IVR says 'please wait while we connect you to the next available agent', stay silent for as long as it takes. Do NOT speak until the agent says something first."
     )
 
     dtmf_instruction = (
