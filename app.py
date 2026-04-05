@@ -161,18 +161,18 @@ def start_call():
     dtmf_instruction = (
         "\n\nDTMF / KEYPAD RULES (CRITICAL): "
         "1. When interacting with an IVR, phone menu, or automated system that asks you to 'press 1', 'press 2', etc., "
-        "you MUST use the dialKeypad function to send the DTMF tone. NEVER say the number out loud. "
-        "2. To press a key, call the function dialKeypad with the appropriate digit (0-9, *, #). "
+        "you MUST use the dtmf function to send the keypad tone. NEVER say the number out loud. "
+        "2. To press a key, use the dtmf function with the appropriate digit (0-9, *, #). "
         "3. Examples: "
-        "   - 'Press 1 for English' → call dialKeypad with digit '1' "
-        "   - 'Press 0 for operator' → call dialKeypad with digit '0' "
-        "   - 'Press 9 to repeat' → call dialKeypad with digit '9' "
-        "   - 'Press # to confirm' → call dialKeypad with digit '#' "
-        "   - 'Press * to go back' → call dialKeypad with digit '*' "
-        "4. If the menu says 'press or say', ALWAYS press using dialKeypad — never speak the number. "
+        "   - 'Press 1 for English' → use dtmf to send '1' "
+        "   - 'Press 0 for operator' → use dtmf to send '0' "
+        "   - 'Press 9 to repeat' → use dtmf to send '9' "
+        "   - 'Press # to confirm' → use dtmf to send '#' "
+        "   - 'Press * to go back' → use dtmf to send '*' "
+        "4. If the menu says 'press or say', ALWAYS use dtmf to press — never speak the number. "
         "5. After pressing a key, wait silently for the system to respond. "
-        "6. If you need to enter multiple digits (like an extension number), press each digit one at a time using dialKeypad. "
-        "7. Only use dialKeypad for IVR/automated systems. When talking to a real human, speak normally."
+        "6. If you need to enter multiple digits (like an extension), send each digit using dtmf. "
+        "7. Only use dtmf for IVR/automated systems. When talking to a real human, speak normally."
     )
 
     if is_confirmation:
@@ -218,21 +218,9 @@ def start_call():
                     }
                 ],
                 "temperature": 0.3,
-                "functions": [
+                "tools": [
                     {
-                        "name": "dialKeypad",
-                        "description": "Press a phone keypad button to send a DTMF tone. Use this when navigating IVR menus, automated phone systems, or any time the system asks you to 'press' a number. Never say the number out loud — always use this function instead.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "digit": {
-                                    "type": "string",
-                                    "description": "The keypad digit to press. Valid values: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, *, #",
-                                    "enum": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "#"]
-                                }
-                            },
-                            "required": ["digit"]
-                        }
+                        "type": "dtmf"
                     }
                 ]
             },
@@ -241,9 +229,6 @@ def start_call():
                 "voiceId": "shimmer"
             },
             "serverUrl": webhook_url,
-
-            # ===== ENABLE DTMF KEYPAD =====
-            "dialKeypadFunctionEnabled": True,
 
             # ===== PREVENT EARLY HANGUP — SILENCE & HOLD PROTECTION =====
             "silenceTimeoutSeconds": 120,
