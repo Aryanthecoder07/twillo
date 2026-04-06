@@ -230,7 +230,7 @@ def start_call():
             },
             "voice": {
                 "provider": "openai",
-                "voiceId": "shimmer"
+                "voiceId": "sage"
             },
             "serverUrl": webhook_url,
 
