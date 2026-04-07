@@ -24,10 +24,70 @@ def health():
 
 
 # ============================================
+# DIAGNOSTIC TEST CALL — NO WEBHOOK AT ALL
+# ============================================
+@app.route("/test-call", methods=["POST"])
+def test_call():
+    """
+    Ultra-minimal call with NO serverUrl.
+    If this works but /start-call doesn't → webhook is the problem.
+    If this also doesn't work → Vapi account/phone config issue.
+    """
+    data = request.json
+    phone_number = data.get("phone")
+
+    if not phone_number:
+        return jsonify({"error": "Send {\"phone\": \"+91XXXXXXXXXX\"}"}), 400
+
+    vapi_payload = {
+        "assistant": {
+            "firstMessage": "Hello! This is a test call. Can you hear me clearly? Please say yes or no.",
+            "model": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are making a quick test call. Greet the person. Ask if they can hear you. Then say goodbye."
+                    }
+                ],
+                "temperature": 0.3
+            },
+            "voice": {
+                "provider": "vapi",
+                "voiceId": "Layla"
+            },
+            "silenceTimeoutSeconds": 30,
+            "maxDurationSeconds": 60
+            # NOTE: No serverUrl here — completely standalone
+        },
+        "phoneNumberId": VAPI_PHONE_NUMBER_ID,
+        "customer": {
+            "number": phone_number
+        }
+    }
+
+    try:
+        response = requests.post(
+            "https://api.vapi.ai/call/phone",
+            headers={
+                "Authorization": f"Bearer {VAPI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json=vapi_payload,
+            timeout=20
+        )
+        print(f"TEST CALL Status: {response.status_code}")
+        print(f"TEST CALL Response: {response.text}")
+        return jsonify(response.json()), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ============================================
 # AI TRANSCRIPT ANALYZER (GROQ — FREE)
 # ============================================
 def analyze_transcript(transcript):
-    """Send transcript to Groq LLaMA 3.1 8B and get verdict."""
     if not GROQ_API_KEY:
         print("ERROR: GROQ_API_KEY not set")
         return "UNKNOWN", "Could not analyze — missing API key.", ""
@@ -120,54 +180,6 @@ def start_call():
 
     is_confirmation = "confirm" in str(goal).lower()
 
-    # ============================================
-    # CLEAN, CONSOLIDATED LANGUAGE INSTRUCTION
-    # ============================================
-    language_instruction = (
-        "\n\nLANGUAGE RULES:\n"
-        "- Detect the language the other person speaks in their FIRST sentence.\n"
-        "- Immediately switch to that language for ALL your responses.\n"
-        "- Hindi → reply in Hindi. Tamil → Tamil. Telugu → Telugu. Etc.\n"
-        "- If they mix languages, match their style naturally.\n"
-        "- Use natural colloquial phrasing, not textbook translations.\n"
-        "- Exception: When interacting with IVR/automated systems, use English.\n"
-    )
-
-    # ============================================
-    # CLEAN, CONSOLIDATED CALL BEHAVIOR INSTRUCTION
-    # ============================================
-    call_behavior_instruction = (
-        "\n\nCALL BEHAVIOR RULES:\n"
-        "- ALWAYS deliver your opening message as soon as someone answers.\n"
-        "- If someone says 'hello', 'hi', or greets you — RESPOND immediately. They are a real person.\n"
-        "- If you reach an IVR/automated system, try to connect to a human operator.\n"
-        "- Choose options for: operator > reception > appointments > other.\n"
-        "- For IVR menus that say 'press 1', 'press 2' etc., use the dtmf function to send keypad tones. NEVER say digits aloud.\n"
-        "- After pressing a key, wait silently for the system to respond.\n"
-        "- If the IVR asks for language, choose English.\n"
-        "- Once a real human answers, switch to their language and resume normal conversation.\n"
-    )
-
-    # ============================================
-    # CLEAN, CONSOLIDATED SILENCE/HOLD INSTRUCTION
-    # ============================================
-    silence_and_hold_instruction = (
-        "\n\nSILENCE AND HOLD RULES:\n"
-        "- When the call first connects, ALWAYS deliver your opening message immediately.\n"
-        "- If someone says 'hello' or greets you, RESPOND — they are a real person.\n"
-        "- Only go silent if you hear EXPLICIT hold phrases like 'please hold', "
-        "'transferring you', 'connecting you', or hold music.\n"
-        "- If on hold, wait silently. When a new voice speaks, greet them and state your purpose.\n"
-        "- If there is dead silence for 20 seconds, say 'Hello, are you there?' ONCE.\n"
-        "- After that one check, wait silently for another 40 seconds.\n"
-        "- Consider the call dropped ONLY after 60 seconds of absolute dead silence.\n"
-        "- Hold music or background noise means the call is active — wait silently.\n"
-        "- NEVER say goodbye or hang up just because of a pause.\n"
-    )
-
-    # ============================================
-    # BUILD SYSTEM PROMPT (CONFIRMATION vs NEW BOOKING)
-    # ============================================
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
         opening_line = (
@@ -175,13 +187,18 @@ def start_call():
             f"We would like to confirm the slot for {slot}. Is that still available?"
         )
         system_prompt = (
-            f"You are confirming a booking for {customer_name} at {business_name} for {slot}.\n"
-            "Keep it brief and polite. Confirm availability clearly.\n"
-            "If the slot is not available, ask for 2-3 alternative available times "
-            "and say you will check with the customer and call back."
-            + language_instruction
-            + call_behavior_instruction
-            + silence_and_hold_instruction
+            f"You are confirming a booking for {customer_name} at {business_name} for {slot}.\n\n"
+            "RULES:\n"
+            "- Be brief and polite. Confirm availability clearly.\n"
+            "- If the slot is not available, ask for 2-3 alternatives and say you will check with the customer.\n"
+            "- ALWAYS speak your opening message immediately when someone answers.\n"
+            "- If someone says hello or greets you, RESPOND immediately.\n"
+            "- Match the language the other person speaks (Hindi, Tamil, Telugu, etc.).\n"
+            "- Use natural colloquial phrasing.\n"
+            "- If you reach an IVR/automated system, try to connect to a human. Stay in English for IVR.\n"
+            "- If put on hold, wait silently until a person speaks, then greet them.\n"
+            "- If silence lasts 20 seconds, say 'Hello, are you there?' once, then wait.\n"
+            "- Never hang up because of a pause, hold music, or silence.\n"
         )
     else:
         opening_line = (
@@ -190,20 +207,23 @@ def start_call():
         )
         system_prompt = (
             f"You are a polite phone assistant calling on behalf of {customer_name}.\n"
-            f"You are calling {business_name}.\n"
+            f"Calling: {business_name}\n"
             f"Goal: {goal}\n"
             f"Details: {details}\n\n"
-            "If the requested slot is taken, ask for 2-3 alternative available times.\n"
-            "Once you have alternatives, say you will check with the customer and call back.\n"
-            "Be concise, natural, and human-like."
-            + language_instruction
-            + call_behavior_instruction
-            + silence_and_hold_instruction
+            "RULES:\n"
+            "- ALWAYS speak your opening message immediately when someone answers.\n"
+            "- If someone says hello or greets you, RESPOND immediately.\n"
+            "- If the requested slot is taken, ask for 2-3 alternatives.\n"
+            "- Once you have alternatives, say you will check with the customer and call back.\n"
+            "- Match the language the other person speaks (Hindi, Tamil, Telugu, etc.).\n"
+            "- Use natural colloquial phrasing, not textbook translations.\n"
+            "- If you reach an IVR/automated system, try to connect to a human. Stay in English for IVR.\n"
+            "- If put on hold, wait silently until a person speaks, then greet them.\n"
+            "- If silence lasts 20 seconds, say 'Hello, are you there?' once, then wait.\n"
+            "- Never hang up because of a pause, hold music, or silence.\n"
+            "- Be concise, natural, and human-like.\n"
         )
 
-    # ============================================
-    # VAPI PAYLOAD — FIXED SETTINGS
-    # ============================================
     vapi_payload = {
         "assistant": {
             "firstMessage": opening_line,
@@ -216,40 +236,25 @@ def start_call():
                         "content": system_prompt
                     }
                 ],
-                "temperature": 0.3,
-                "tools": [
-                    {
-                        "type": "dtmf"
-                    }
-                ]
+                "temperature": 0.3
             },
             "voice": {
-                "provider": "openai",
-                "voiceId": "sage"
+                "provider": "vapi",
+                "voiceId": "Layla"
             },
             "serverUrl": webhook_url,
-
-            # ===== FIXED: PREVENT EARLY HANGUP WITHOUT SILENCING THE AI =====
             "silenceTimeoutSeconds": 60,
             "maxDurationSeconds": 600,
             "responseDelaySeconds": 0.5,
-            "numWordsToInterruptAssistant": 5,
-            "backgroundSound": "off",
-
-            # Transport / ring timeout
-            "transportConfigurations": [
-                {
-                    "provider": "twilio",
-                    "timeout": 60,
-                    "record": False
-                }
-            ]
+            "numWordsToInterruptAssistant": 5
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
         "customer": {
             "number": phone_number
         }
     }
+
+    print(f"DEBUG: Sending Vapi payload: {vapi_payload}")
 
     try:
         headers = {
@@ -290,7 +295,7 @@ def start_call():
 
 
 # ============================================
-# VAPI WEBHOOK — END OF CALL REPORT
+# VAPI WEBHOOK — HANDLES ALL EVENT TYPES
 # ============================================
 @app.route("/vapi-webhook", methods=["POST"])
 def vapi_webhook():
@@ -298,97 +303,161 @@ def vapi_webhook():
     print(f"DEBUG WEBHOOK RAW: {data}")
 
     if not data:
-        return "OK", 200
+        return jsonify({}), 200
 
-    if data.get("type") == "end-of-call-report":
-        msg = data
-    elif data.get("message", {}).get("type") == "end-of-call-report":
-        msg = data.get("message", {})
-    else:
-        return "OK", 200
+    # ============================================
+    # DETECT EVENT TYPE (Vapi sends it in different formats)
+    # ============================================
+    event_type = data.get("type") or data.get("message", {}).get("type", "")
+    print(f"DEBUG WEBHOOK EVENT TYPE: {event_type}")
 
-    call_id = msg.get("call", {}).get("id")
-    session = call_sessions.get(call_id)
-    if not session:
-        return "OK", 200
+    # ============================================
+    # HANDLE: assistant-request
+    # Vapi asks "what assistant should I use?"
+    # We DON'T use this — our assistant is inline.
+    # But we must respond properly or it blocks.
+    # ============================================
+    if event_type == "assistant-request":
+        print("DEBUG: assistant-request received — returning empty (inline assistant used)")
+        return jsonify({}), 200
 
-    chat_id = session["chat_id"]
-    transcript = msg.get("artifact", {}).get("transcript", "").strip()
-    reason = msg.get("endedReason", "")
+    # ============================================
+    # HANDLE: function-call / tool-calls
+    # If Vapi thinks a tool was called, respond empty
+    # ============================================
+    if event_type in ["function-call", "tool-calls"]:
+        print(f"DEBUG: {event_type} received — returning empty result")
+        return jsonify({"results": []}), 200
 
-    print(f"DEBUG WEBHOOK: endedReason={reason}, transcript={transcript}")
+    # ============================================
+    # HANDLE: status-update
+    # Vapi sends call status changes
+    # ============================================
+    if event_type == "status-update":
+        status = data.get("status") or data.get("message", {}).get("status", "")
+        print(f"DEBUG: status-update → {status}")
+        return jsonify({}), 200
 
-    if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
-        text = "🚫 *Business is not picking up calls.*\nPlease try again later."
+    # ============================================
+    # HANDLE: speech-update
+    # ============================================
+    if event_type == "speech-update":
+        print("DEBUG: speech-update received")
+        return jsonify({}), 200
 
-    elif not transcript:
-        text = (
-            f"⚠️ *Call connected but no conversation recorded.*\n\n"
-            f"Ended reason: `{reason}`\n\n"
-            "Please try again with /start."
-        )
+    # ============================================
+    # HANDLE: transcript
+    # ============================================
+    if event_type in ["transcript", "conversation-update"]:
+        print(f"DEBUG: {event_type} received")
+        return jsonify({}), 200
 
-    else:
-        status, summary, alternatives = analyze_transcript(transcript)
+    # ============================================
+    # HANDLE: hang
+    # ============================================
+    if event_type == "hang":
+        print("DEBUG: hang event received")
+        return jsonify({}), 200
 
-        if status == "CONFIRMED":
+    # ============================================
+    # HANDLE: end-of-call-report — THE MAIN ONE
+    # ============================================
+    if event_type == "end-of-call-report":
+        if data.get("type") == "end-of-call-report":
+            msg = data
+        else:
+            msg = data.get("message", {})
+
+        call_id = msg.get("call", {}).get("id")
+        session = call_sessions.get(call_id)
+        if not session:
+            print(f"DEBUG: No session found for call_id={call_id}")
+            return jsonify({}), 200
+
+        chat_id = session["chat_id"]
+        transcript = msg.get("artifact", {}).get("transcript", "").strip()
+        reason = msg.get("endedReason", "")
+
+        print(f"DEBUG WEBHOOK: endedReason={reason}, transcript_length={len(transcript)}")
+        print(f"DEBUG WEBHOOK: transcript={transcript}")
+
+        if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
+            text = "🚫 *Business is not picking up calls.*\nPlease try again later."
+
+        elif not transcript:
             text = (
-                f"✅ *Booking Confirmed!*\n\n"
-                f"📋 *Summary:* {summary}\n\n"
-                f"*Full Transcript:*\n{transcript}"
-            )
-
-        elif status == "ALTERNATIVES_OFFERED":
-            alt_text = (
-                f"\n📌 *Alternatives:* {alternatives}"
-                if alternatives and alternatives != "NONE"
-                else ""
-            )
-            text = (
-                f"⚠️ *Requested slot not available*\n\n"
-                f"📋 *Summary:* {summary}{alt_text}\n\n"
-                f"*Full Transcript:*\n{transcript}\n\n"
-                "────────────────\n"
-                "Reply with the *new time* to confirm, or /exit."
-            )
-
-        elif status == "REJECTED":
-            text = (
-                f"❌ *Booking Rejected*\n\n"
-                f"📋 *Summary:* {summary}\n\n"
-                f"*Full Transcript:*\n{transcript}\n\n"
-                "────────────────\n"
-                "Try a different business or time with /start."
+                f"⚠️ *Call connected but no conversation recorded.*\n\n"
+                f"Ended reason: `{reason}`\n\n"
+                "Please try again with /start."
             )
 
         else:
-            text = (
-                f"📞 *Call Completed*\n\n"
-                f"📋 *Summary:* {summary}\n\n"
-                f"*Full Transcript:*\n{transcript}\n\n"
-                "────────────────\n"
-                "Reply with *new time* or /exit."
-            )
+            status, summary, alternatives = analyze_transcript(transcript)
 
-    if TELEGRAM_BOT_TOKEN:
-        tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        try:
-            requests.post(
-                tg_url,
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown"
-                },
-                timeout=15
-            )
-        except Exception as e:
-            print(f"Telegram send error: {str(e)}")
+            if status == "CONFIRMED":
+                text = (
+                    f"✅ *Booking Confirmed!*\n\n"
+                    f"📋 *Summary:* {summary}\n\n"
+                    f"*Full Transcript:*\n{transcript}"
+                )
 
-    if call_id in call_sessions:
-        del call_sessions[call_id]
+            elif status == "ALTERNATIVES_OFFERED":
+                alt_text = (
+                    f"\n📌 *Alternatives:* {alternatives}"
+                    if alternatives and alternatives != "NONE"
+                    else ""
+                )
+                text = (
+                    f"⚠️ *Requested slot not available*\n\n"
+                    f"📋 *Summary:* {summary}{alt_text}\n\n"
+                    f"*Full Transcript:*\n{transcript}\n\n"
+                    "────────────────\n"
+                    "Reply with the *new time* to confirm, or /exit."
+                )
 
-    return "OK", 200
+            elif status == "REJECTED":
+                text = (
+                    f"❌ *Booking Rejected*\n\n"
+                    f"📋 *Summary:* {summary}\n\n"
+                    f"*Full Transcript:*\n{transcript}\n\n"
+                    "────────────────\n"
+                    "Try a different business or time with /start."
+                )
+
+            else:
+                text = (
+                    f"📞 *Call Completed*\n\n"
+                    f"📋 *Summary:* {summary}\n\n"
+                    f"*Full Transcript:*\n{transcript}\n\n"
+                    "────────────────\n"
+                    "Reply with *new time* or /exit."
+                )
+
+        if TELEGRAM_BOT_TOKEN:
+            tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            try:
+                requests.post(
+                    tg_url,
+                    json={
+                        "chat_id": chat_id,
+                        "text": text,
+                        "parse_mode": "Markdown"
+                    },
+                    timeout=15
+                )
+            except Exception as e:
+                print(f"Telegram send error: {str(e)}")
+
+        if call_id in call_sessions:
+            del call_sessions[call_id]
+
+        return jsonify({}), 200
+
+    # ============================================
+    # HANDLE: ANY OTHER EVENT — RESPOND WITH JSON
+    # ============================================
+    print(f"DEBUG: Unhandled webhook event type: {event_type}")
+    return jsonify({}), 200
 
 
 # ============================================
