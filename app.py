@@ -120,65 +120,54 @@ def start_call():
 
     is_confirmation = "confirm" in str(goal).lower()
 
+    # ============================================
+    # CLEAN, CONSOLIDATED LANGUAGE INSTRUCTION
+    # ============================================
     language_instruction = (
-        "\n\nCRITICAL LANGUAGE RULES: "
-        "1. Detect the language the other person speaks in their first real sentence. "
-        "2. Immediately switch to that same language for all responses. "
-        "3. If they speak Hindi, reply only in Hindi. Tamil → Tamil. Telugu → Telugu. "
-        "4. If they mix languages, match that style naturally. "
-        "5. Never keep speaking English if they switched to another language, unless you are interacting with an automated phone system or IVR. "
-        "6. Use natural colloquial phrasing, not textbook translations."
+        "\n\nLANGUAGE RULES:\n"
+        "- Detect the language the other person speaks in their FIRST sentence.\n"
+        "- Immediately switch to that language for ALL your responses.\n"
+        "- Hindi → reply in Hindi. Tamil → Tamil. Telugu → Telugu. Etc.\n"
+        "- If they mix languages, match their style naturally.\n"
+        "- Use natural colloquial phrasing, not textbook translations.\n"
+        "- Exception: When interacting with IVR/automated systems, use English.\n"
     )
 
+    # ============================================
+    # CLEAN, CONSOLIDATED CALL BEHAVIOR INSTRUCTION
+    # ============================================
     call_behavior_instruction = (
-        "\n\nCALL BEHAVIOR RULES: "
-        "1. If the call is placed on hold, remain silent and wait patiently for the human to return. "
-        "2. Do not hang up because of hold music, ringing, silence, or transfer announcements. "
-        "3. If you reach an IVR, phone menu, automated system, or recorded voice, always try to connect to a human. "
-        "4. Always choose any valid option for operator, representative, receptionist, front desk, staff, or human assistance. "
-        "5. If the automated system asks for language preference, always choose English. "
-        "6. While interacting with an IVR, automated system, voicemail tree, or calling program, continue in English. "
-        "7. If multiple options are given, prioritize: human/operator/reception/front desk > appointments/reservations/bookings > all other options. "
-        "8. Do not get stuck repeating long sentences to the IVR; use short clear responses like 'English', 'operator', 'representative', 'reception', or the valid keypad/menu option. "
-        "9. Once a human answers, resume the normal conversation and switch to the human's language if they speak another language. "
-        "10. If transferred, stay on the line and continue patiently until connected."
+        "\n\nCALL BEHAVIOR RULES:\n"
+        "- ALWAYS deliver your opening message as soon as someone answers.\n"
+        "- If someone says 'hello', 'hi', or greets you — RESPOND immediately. They are a real person.\n"
+        "- If you reach an IVR/automated system, try to connect to a human operator.\n"
+        "- Choose options for: operator > reception > appointments > other.\n"
+        "- For IVR menus that say 'press 1', 'press 2' etc., use the dtmf function to send keypad tones. NEVER say digits aloud.\n"
+        "- After pressing a key, wait silently for the system to respond.\n"
+        "- If the IVR asks for language, choose English.\n"
+        "- Once a real human answers, switch to their language and resume normal conversation.\n"
     )
 
+    # ============================================
+    # CLEAN, CONSOLIDATED SILENCE/HOLD INSTRUCTION
+    # ============================================
     silence_and_hold_instruction = (
-        "\n\nSILENCE AND HOLD HANDLING RULES: "
-        "1. If there is silence, DO NOT hang up. Wait patiently. "
-        "2. If silence lasts more than 15 seconds, say 'Hello? Are you still there?' ONCE. "
-        "3. After that, wait silently for at least another 45 seconds before considering the call dropped. "
-        "4. Hold music, background noise, ringing tones, or muffled sounds mean the call is still active — keep waiting and DO NOT speak. "
-        "5. Never say goodbye or end the call just because of a pause or hold. "
-        "6. If you hear 'please hold' or 'one moment' or 'wait' or 'please wait' or 'connecting you' or 'transferring' in ANY language, remain COMPLETELY SILENT and wait for a real human to greet you. "
-        "7. If transferred to another person or department, wait patiently for the new person to speak first. DO NOT start talking until the new person says hello or greets you. "
-        "8. Do NOT repeatedly ask 'are you there?' — ask only ONCE after 15 seconds of true silence (no music, no noise). "
-        "9. If hold music is playing, do NOT speak at all — just wait silently until a human voice returns. "
-        "10. Consider the call dropped ONLY if there is absolute dead silence (no sound at all) for more than 60 seconds. "
-        "11. CRITICAL: When an automated system says 'please wait while we connect you' or similar, DO NOT start your booking request. Stay COMPLETELY SILENT until a REAL HUMAN greets you with something like 'hello', 'hi', 'how can I help you', etc. "
-        "12. You can tell the difference between an automated message and a real human: automated messages are pre-recorded and say things like 'please wait', 'your call is important', 'connecting you'. A real human will greet you personally or ask how they can help. "
-        "13. After hearing any transfer/hold message, wait at least 5-10 seconds of silence before assuming a human has answered. "
-        "14. If the IVR says 'please wait while we connect you to the next available agent', stay silent for as long as it takes. Do NOT speak until the agent says something first."
+        "\n\nSILENCE AND HOLD RULES:\n"
+        "- When the call first connects, ALWAYS deliver your opening message immediately.\n"
+        "- If someone says 'hello' or greets you, RESPOND — they are a real person.\n"
+        "- Only go silent if you hear EXPLICIT hold phrases like 'please hold', "
+        "'transferring you', 'connecting you', or hold music.\n"
+        "- If on hold, wait silently. When a new voice speaks, greet them and state your purpose.\n"
+        "- If there is dead silence for 20 seconds, say 'Hello, are you there?' ONCE.\n"
+        "- After that one check, wait silently for another 40 seconds.\n"
+        "- Consider the call dropped ONLY after 60 seconds of absolute dead silence.\n"
+        "- Hold music or background noise means the call is active — wait silently.\n"
+        "- NEVER say goodbye or hang up just because of a pause.\n"
     )
 
-    dtmf_instruction = (
-        "\n\nDTMF / KEYPAD RULES (CRITICAL): "
-        "1. When interacting with an IVR, phone menu, or automated system that asks you to 'press 1', 'press 2', etc., "
-        "you MUST use the dtmf function to send the keypad tone. NEVER say the number out loud. "
-        "2. To press a key, use the dtmf function with the appropriate digit (0-9, *, #). "
-        "3. Examples: "
-        "   - 'Press 1 for English' → use dtmf to send '1' "
-        "   - 'Press 0 for operator' → use dtmf to send '0' "
-        "   - 'Press 9 to repeat' → use dtmf to send '9' "
-        "   - 'Press # to confirm' → use dtmf to send '#' "
-        "   - 'Press * to go back' → use dtmf to send '*' "
-        "4. If the menu says 'press or say', ALWAYS use dtmf to press — never speak the number. "
-        "5. After pressing a key, wait silently for the system to respond. "
-        "6. If you need to enter multiple digits (like an extension), send each digit using dtmf. "
-        "7. Only use dtmf for IVR/automated systems. When talking to a real human, speak normally."
-    )
-
+    # ============================================
+    # BUILD SYSTEM PROMPT (CONFIRMATION vs NEW BOOKING)
+    # ============================================
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
         opening_line = (
@@ -186,13 +175,13 @@ def start_call():
             f"We would like to confirm the slot for {slot}. Is that still available?"
         )
         system_prompt = (
-            f"You are confirming a booking for {customer_name} at {business_name} for {slot}. "
-            "Keep it brief and polite. Confirm availability clearly. "
-            "If the slot is not available, ask for 2-3 alternative available times and say you will check with the customer and call back."
+            f"You are confirming a booking for {customer_name} at {business_name} for {slot}.\n"
+            "Keep it brief and polite. Confirm availability clearly.\n"
+            "If the slot is not available, ask for 2-3 alternative available times "
+            "and say you will check with the customer and call back."
             + language_instruction
             + call_behavior_instruction
             + silence_and_hold_instruction
-            + dtmf_instruction
         )
     else:
         opening_line = (
@@ -200,15 +189,21 @@ def start_call():
             "Am I speaking with the right place?"
         )
         system_prompt = (
-            f"You are a polite assistant for {customer_name}. Goal: {goal}. Details: {details}. "
-            "If the requested slot is taken, ask for 2-3 alternative available times. "
-            "Once you have alternatives, say you will check with the customer and call back."
+            f"You are a polite phone assistant calling on behalf of {customer_name}.\n"
+            f"You are calling {business_name}.\n"
+            f"Goal: {goal}\n"
+            f"Details: {details}\n\n"
+            "If the requested slot is taken, ask for 2-3 alternative available times.\n"
+            "Once you have alternatives, say you will check with the customer and call back.\n"
+            "Be concise, natural, and human-like."
             + language_instruction
             + call_behavior_instruction
             + silence_and_hold_instruction
-            + dtmf_instruction
         )
 
+    # ============================================
+    # VAPI PAYLOAD — FIXED SETTINGS
+    # ============================================
     vapi_payload = {
         "assistant": {
             "firstMessage": opening_line,
@@ -234,11 +229,11 @@ def start_call():
             },
             "serverUrl": webhook_url,
 
-            # ===== PREVENT EARLY HANGUP — SILENCE & HOLD PROTECTION =====
-            "silenceTimeoutSeconds": 120,
+            # ===== FIXED: PREVENT EARLY HANGUP WITHOUT SILENCING THE AI =====
+            "silenceTimeoutSeconds": 60,
             "maxDurationSeconds": 600,
-            "responseDelaySeconds": 1.5,
-            "numWordsToInterruptAssistant": 2,
+            "responseDelaySeconds": 0.5,
+            "numWordsToInterruptAssistant": 5,
             "backgroundSound": "off",
 
             # Transport / ring timeout
@@ -344,7 +339,11 @@ def vapi_webhook():
             )
 
         elif status == "ALTERNATIVES_OFFERED":
-            alt_text = f"\n📌 *Alternatives:* {alternatives}" if alternatives and alternatives != "NONE" else ""
+            alt_text = (
+                f"\n📌 *Alternatives:* {alternatives}"
+                if alternatives and alternatives != "NONE"
+                else ""
+            )
             text = (
                 f"⚠️ *Requested slot not available*\n\n"
                 f"📋 *Summary:* {summary}{alt_text}\n\n"
