@@ -54,8 +54,8 @@ def test_call():
                 "temperature": 0.3
             },
             "voice": {
-                "provider": "vapi",
-                "voiceId": "Layla"
+                "provider": "openai",
+                "voiceId": "verse"
             },
             "silenceTimeoutSeconds": 30,
             "maxDurationSeconds": 60
