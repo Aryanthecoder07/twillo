@@ -1,4 +1,4 @@
-import os
+Import os
 import requests
 from flask import Flask, request, jsonify
 
@@ -34,11 +34,12 @@ def test_call():
     If this also doesn't work → Vapi account/phone config issue.
     """
     data = request.json
-    phone_number = data.get("phone")
+    phone_number = data.get("phone") if data else None
 
     if not phone_number:
         return jsonify({"error": "Send {\"phone\": \"+91XXXXXXXXXX\"}"}), 400
 
+    # NOTE: DTMF tool included so the assistant can press keys if it hits an IVR
     vapi_payload = {
         "assistant": {
             "firstMessage": "Hello! This is a test call. Can you hear me clearly? Please say yes or no.",
@@ -48,10 +49,27 @@ def test_call():
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are making a quick test call. Greet the person. Ask if they can hear you. Then say goodbye."
+                        "content": (
+                            "You are making a quick test call. Greet the person. Ask if they can hear you. "
+                            "If an IVR answers, choose English if available and try to reach a human, then say goodbye.\n\n"
+                            "IVR / DIALPAD RULES (VERY IMPORTANT):\n"
+                            "- If you hear an automated menu (IVR), do NOT keep talking over it. Navigate the menu.\n"
+                            "- If there is a language choice and English is an option, ALWAYS choose English.\n"
+                            "  Example: \"Press 1 for Hindi, Press 2 for English\" -> press 2 using the dtmf tool.\n"
+                            "- After choosing English, try to reach a human agent.\n"
+                            "- Prefer these options in order:\n"
+                            "  1) If the IVR explicitly says \"bookings\"/\"reservations\", press that.\n"
+                            "  2) If it says \"agent/representative/operator\", press that.\n"
+                            "  3) Otherwise press 0 for operator if offered/commonly accepted.\n"
+                            "- If the IVR is still talking, WAIT silently until it finishes, then press keys.\n"
+                            "- After pressing a key, WAIT for the next prompt before speaking again.\n"
+                        )
                     }
                 ],
-                "temperature": 0.3
+                "temperature": 0.3,
+                "tools": [
+                    {"type": "dtmf"}
+                ],
             },
             "voice": {
                 "provider": "openai",
@@ -172,13 +190,28 @@ def start_call():
     chat_id = data.get("chat_id")
     business_name = data.get("business_name", "the business")
     goal = data.get("goal", "make an inquiry")
-    details = data.get("details", {})
+    details = data.get("details", {}) or {}
     customer_name = details.get("customer_name", "a customer")
 
     webhook_url = f"{BASE_URL}/vapi-webhook"
     print(f"DEBUG: webhook_url = {webhook_url}")
 
     is_confirmation = "confirm" in str(goal).lower()
+
+    # ---- Common IVR instructions (added to system prompt) ----
+    ivr_rules = """
+IVR / DIALPAD RULES (VERY IMPORTANT):
+- If you hear an automated menu (IVR), do NOT keep explaining the request. Navigate the menu.
+- If there is a language choice and English is an option, ALWAYS choose English.
+  Example: "Press 1 for Hindi, Press 2 for English" -> press 2 using the dtmf tool.
+- After choosing English, try to reach a human agent for bookings/reservations.
+- Prefer these options in order:
+  1) If the IVR explicitly says "bookings" or "reservations", press that option.
+  2) If it says "talk to agent/representative/operator", press that option.
+  3) Otherwise press 0 for operator if offered/commonly accepted.
+- If the IVR is still talking, WAIT silently until it finishes, then press keys.
+- After pressing a key, WAIT for the next prompt before speaking again.
+"""
 
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
@@ -195,10 +228,10 @@ def start_call():
             "- If someone says hello or greets you, RESPOND immediately.\n"
             "- Match the language the other person speaks (Hindi, Tamil, Telugu, etc.).\n"
             "- Use natural colloquial phrasing.\n"
-            "- If you reach an IVR/automated system, try to connect to a human. Stay in English for IVR.\n"
             "- If put on hold, wait silently until a person speaks, then greet them.\n"
             "- If silence lasts 20 seconds, say 'Hello, are you there?' once, then wait.\n"
             "- Never hang up because of a pause, hold music, or silence.\n"
+            f"{ivr_rules}"
         )
     else:
         opening_line = (
@@ -217,11 +250,11 @@ def start_call():
             "- Once you have alternatives, say you will check with the customer and call back.\n"
             "- Match the language the other person speaks (Hindi, Tamil, Telugu, etc.).\n"
             "- Use natural colloquial phrasing, not textbook translations.\n"
-            "- If you reach an IVR/automated system, try to connect to a human. Stay in English for IVR.\n"
             "- If put on hold, wait silently until a person speaks, then greet them.\n"
             "- If silence lasts 20 seconds, say 'Hello, are you there?' once, then wait.\n"
             "- Never hang up because of a pause, hold music, or silence.\n"
             "- Be concise, natural, and human-like.\n"
+            f"{ivr_rules}"
         )
 
     vapi_payload = {
@@ -236,7 +269,11 @@ def start_call():
                         "content": system_prompt
                     }
                 ],
-                "temperature": 0.3
+                "temperature": 0.3,
+                # IMPORTANT: Add the dialpad tool so the assistant can press IVR options
+                "tools": [
+                    {"type": "dtmf"}
+                ]
             },
             "voice": {
                 "provider": "vapi",
@@ -324,6 +361,7 @@ def vapi_webhook():
     # ============================================
     # HANDLE: function-call / tool-calls
     # If Vapi thinks a tool was called, respond empty
+    # (DTMF tool does not require webhook response, but safe to handle tool-calls anyway.)
     # ============================================
     if event_type in ["function-call", "tool-calls"]:
         print(f"DEBUG: {event_type} received — returning empty result")
@@ -331,7 +369,6 @@ def vapi_webhook():
 
     # ============================================
     # HANDLE: status-update
-    # Vapi sends call status changes
     # ============================================
     if event_type == "status-update":
         status = data.get("status") or data.get("message", {}).get("status", "")
@@ -346,7 +383,7 @@ def vapi_webhook():
         return jsonify({}), 200
 
     # ============================================
-    # HANDLE: transcript
+    # HANDLE: transcript / conversation-update
     # ============================================
     if event_type in ["transcript", "conversation-update"]:
         print(f"DEBUG: {event_type} received")
@@ -374,8 +411,9 @@ def vapi_webhook():
             print(f"DEBUG: No session found for call_id={call_id}")
             return jsonify({}), 200
 
-        chat_id = session["chat_id"]
-        transcript = msg.get("artifact", {}).get("transcript", "").strip()
+        chat_id = session.get("chat_id")
+        transcript = (msg.get("artifact", {}) or {}).get("transcript", "") or ""
+        transcript = transcript.strip()
         reason = msg.get("endedReason", "")
 
         print(f"DEBUG WEBHOOK: endedReason={reason}, transcript_length={len(transcript)}")
@@ -433,7 +471,8 @@ def vapi_webhook():
                     "Reply with *new time* or /exit."
                 )
 
-        if TELEGRAM_BOT_TOKEN:
+        # Send to Telegram (if configured)
+        if TELEGRAM_BOT_TOKEN and chat_id:
             tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             try:
                 requests.post(
@@ -448,6 +487,7 @@ def vapi_webhook():
             except Exception as e:
                 print(f"Telegram send error: {str(e)}")
 
+        # Cleanup session
         if call_id in call_sessions:
             del call_sessions[call_id]
 
@@ -462,7 +502,4 @@ def vapi_webhook():
 
 # ============================================
 # RUN SERVER
-# ============================================
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+# ======== 
