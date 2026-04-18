@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
+# --- Environment Variables ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
@@ -28,6 +29,11 @@ def health():
 # ============================================
 @app.route("/test-call", methods=["POST"])
 def test_call():
+    """
+    Ultra-minimal call with NO serverUrl.
+    If this works but /start-call doesn't → webhook is the problem.
+    If this also doesn't work → Vapi account/phone config issue.
+    """
     data = request.json
     phone_number = data.get("phone") if data else None
 
@@ -49,12 +55,12 @@ def test_call():
                             "IVR / DIALPAD RULES (VERY IMPORTANT):\n"
                             "- If you hear an automated menu (IVR), do NOT keep talking over it. Navigate the menu.\n"
                             "- If there is a language choice and English is an option, ALWAYS choose English.\n"
-                            " Example: \"Press 1 for Hindi, Press 2 for English\" -> press 2 using the dtmf tool.\n"
+                            "  Example: \"Press 1 for Hindi, Press 2 for English\" -> press 2 using the dtmf tool.\n"
                             "- After choosing English, try to reach a human agent.\n"
                             "- Prefer these options in order:\n"
-                            " 1) If the IVR explicitly says \"bookings\"/\"reservations\", press that.\n"
-                            " 2) If it says \"agent/representative/operator\", press that.\n"
-                            " 3) Otherwise press 0 for operator if offered/commonly accepted.\n"
+                            "  1) If the IVR explicitly says \"bookings\"/\"reservations\", press that.\n"
+                            "  2) If it says \"agent/representative/operator\", press that.\n"
+                            "  3) Otherwise press 0 for operator if offered/commonly accepted.\n"
                             "- If the IVR is still talking, WAIT silently until it finishes, then press keys.\n"
                             "- After pressing a key, WAIT for the next prompt before speaking again.\n"
                         )
@@ -79,6 +85,7 @@ def test_call():
     }
 
     try:
+        print(f"DEBUG: Initiating Test Call to {phone_number}")
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers={
@@ -88,8 +95,11 @@ def test_call():
             json=vapi_payload,
             timeout=20
         )
+        print(f"TEST CALL Status: {response.status_code}")
+        print(f"TEST CALL Response: {response.text}")
         return jsonify(response.json()), response.status_code
     except Exception as e:
+        print(f"TEST CALL Exception: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -123,6 +133,7 @@ Rules:
 """
 
     try:
+        print("DEBUG: Sending transcript to Groq for analysis...")
         response = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={
@@ -139,7 +150,11 @@ Rules:
 
         if response.status_code == 200:
             result = response.json()["choices"][0]["message"]["content"].strip()
-            status, summary, alternatives = "UNKNOWN", "", ""
+            print(f"DEBUG GROQ ANALYSIS: {result}")
+
+            status = "UNKNOWN"
+            summary = ""
+            alternatives = ""
 
             for line in result.split("\n"):
                 line = line.strip()
@@ -152,9 +167,11 @@ Rules:
 
             return status, summary, alternatives
         else:
+            print(f"Groq Error: {response.status_code} {response.text}")
             return "UNKNOWN", "AI analysis failed.", ""
 
     except Exception as e:
+        print(f"Groq Exception: {str(e)}")
         return "UNKNOWN", "AI analysis failed.", ""
 
 
@@ -168,6 +185,7 @@ def start_call():
         return jsonify({"error": "No data received"}), 400
 
     if not BASE_URL or not BASE_URL.startswith("https://"):
+        print(f"ERROR: BASE_URL is invalid or missing: '{BASE_URL}'")
         return jsonify({"error": "BASE_URL env var not set correctly on Render."}), 500
 
     phone_number = data.get("phone")
@@ -178,18 +196,20 @@ def start_call():
     customer_name = details.get("customer_name", "a customer")
 
     webhook_url = f"{BASE_URL}/vapi-webhook"
+    print(f"DEBUG: webhook_url = {webhook_url}")
+
     is_confirmation = "confirm" in str(goal).lower()
 
     ivr_rules = """
 IVR / DIALPAD RULES (VERY IMPORTANT):
 - If you hear an automated menu (IVR), do NOT keep explaining the request. Navigate the menu.
 - If there is a language choice and English is an option, ALWAYS choose English.
- Example: "Press 1 for Hindi, Press 2 for English" -> press 2 using the dtmf tool.
+  Example: "Press 1 for Hindi, Press 2 for English" -> press 2 using the dtmf tool.
 - After choosing English, try to reach a human agent for bookings/reservations.
 - Prefer these options in order:
- 1) If the IVR explicitly says "bookings" or "reservations", press that option.
- 2) If it says "talk to agent/representative/operator", press that option.
- 3) Otherwise press 0 for operator if offered/commonly accepted.
+  1) If the IVR explicitly says "bookings" or "reservations", press that option.
+  2) If it says "talk to agent/representative/operator", press that option.
+  3) Otherwise press 0 for operator if offered/commonly accepted.
 - If the IVR is still talking, WAIT silently until it finishes, then press keys.
 - After pressing a key, WAIT for the next prompt before speaking again.
 """
@@ -244,11 +264,21 @@ IVR / DIALPAD RULES (VERY IMPORTANT):
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
-                "messages": [{"role": "system", "content": system_prompt}],
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    }
+                ],
                 "temperature": 0.3,
-                "tools": [{"type": "dtmf"}]
+                "tools": [
+                    {"type": "dtmf"}
+                ]
             },
-            "voice": {"provider": "vapi", "voiceId": "Layla"},
+            "voice": {
+                "provider": "vapi",
+                "voiceId": "Layla"
+            },
             "serverUrl": webhook_url,
             "silenceTimeoutSeconds": 60,
             "maxDurationSeconds": 600,
@@ -256,10 +286,13 @@ IVR / DIALPAD RULES (VERY IMPORTANT):
             "numWordsToInterruptAssistant": 5
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
-        "customer": {"number": phone_number}
+        "customer": {
+            "number": phone_number
+        }
     }
 
     try:
+        print(f"DEBUG: Sending Vapi payload for {phone_number}")
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers={"Authorization": f"Bearer {VAPI_API_KEY}", "Content-Type": "application/json"},
@@ -269,9 +302,11 @@ IVR / DIALPAD RULES (VERY IMPORTANT):
         if response.status_code == 201:
             call_id = response.json().get("id")
             call_sessions[call_id] = {"chat_id": chat_id, "phone": phone_number}
+            print(f"DEBUG: Call started. call_id={call_id}")
             return jsonify({"status": "calling", "call_id": call_id})
         return jsonify(response.json()), response.status_code
     except Exception as e:
+        print(f"Exception in /start-call: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -291,34 +326,47 @@ def vapi_webhook():
         call_id = msg.get("call", {}).get("id")
         session = call_sessions.get(call_id)
         if not session:
+            print(f"DEBUG: No session found for call_id={call_id}")
             return jsonify({}), 200
 
         chat_id = session.get("chat_id")
         transcript = (msg.get("artifact", {}) or {}).get("transcript", "") or ""
+        transcript = transcript.strip()
         reason = msg.get("endedReason", "")
 
+        print(f"DEBUG WEBHOOK: endedReason={reason}, transcript_len={len(transcript)}")
+
         if reason in ["customer-did-not-answer", "customer-busy", "voicemail"]:
-            text = "🚫 *Business is not picking up calls.*"
+            text = "🚫 *Business is not picking up calls.*\nPlease try again later."
         elif not transcript:
-            text = "⚠️ *Call connected but no conversation recorded.*"
+            text = f"⚠️ *Call connected but no conversation recorded.*\nReason: `{reason}`"
         else:
             status, summary, alternatives = analyze_transcript(transcript)
-            text = f"📞 *Call Completed*\nStatus: {status}\nSummary: {summary}"
+            
+            text = (
+                f"📞 *Call Completed*\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"📌 *Status:* {status}\n"
+                f"📝 *Summary:* {summary}\n"
+            )
+            if alternatives and alternatives != "NONE":
+                text += f"⏳ *Alternatives:* {alternatives}\n"
+            
+            text += f"\n📜 *Full Transcript:*\n{transcript}"
 
         if TELEGRAM_BOT_TOKEN and chat_id:
+            print(f"DEBUG: Sending report to Telegram chat {chat_id}")
             requests.post(
                 f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
                 json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
             )
+        
         if call_id in call_sessions:
             del call_sessions[call_id]
 
     return jsonify({}), 200
 
 
-# ============================================
-# RUN SERVER
-# ============================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
