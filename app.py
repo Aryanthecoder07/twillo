@@ -2,10 +2,6 @@ import os
 import re
 import requests
 from flask import Flask, request, jsonify
-#from dotenv import load_dotenv
-import io
-
-#load_dotenv()
 
 app = Flask(__name__)
 
@@ -14,7 +10,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")  # ✅ Direct use
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 call_sessions = {}
@@ -23,18 +19,27 @@ call_sessions = {}
 # ELEVENLABS VOICE IDs
 # ============================================
 ELEVENLABS_VOICES = {
-    "english": "21m00Tcm4TlvDq8ikWAM",      # Rachel
-    "hindi": "21m00Tcm4TlvDq8ikWAM",       # Rachel
-    "tamil": "EXAVITQu4vr4xnSDxMaL",       # Bella
-    "telugu": "EXAVITQu4vr4xnSDxMaL",      # Bella
-    "kannada": "zcAOhNBS0xF24SdqwLo1",     # Antoni
-    "malayalam": "zcAOhNBS0xF24SdqwLo1",   # Antoni
-    "bengali": "MF3mGyEYCl7XYWbV7V5l",     # Erin
-    "marathi": "MF3mGyEYCl7XYWbV7V5l",     # Erin
-    "punjabi": "pNInz6obpgDQGcFmaJgB",     # Adam
-    "gujarati": "yoZ06sMSTe6XfoAXiL7u",    # Sam
-    "urdu": "21m00Tcm4TlvDq8ikWAM"         # Rachel
+    "english": "21m00Tcm4TlvDq8ikWAM",
+    "hindi": "21m00Tcm4TlvDq8ikWAM",
+    "tamil": "EXAVITQu4vr4xnSDxMaL",
+    "telugu": "EXAVITQu4vr4xnSDxMaL",
+    "kannada": "zcAOhNBS0xF24SdqwLo1",
+    "malayalam": "zcAOhNBS0xF24SdqwLo1",
+    "bengali": "MF3mGyEYCl7XYWbV7V5l",
+    "marathi": "MF3mGyEYCl7XYWbV7V5l",
+    "punjabi": "pNInz6obpgDQGcFmaJgB",
+    "gujarati": "yoZ06sMSTe6XfoAXiL7u",
+    "urdu": "21m00Tcm4TlvDq8ikWAM",
 }
+
+# ✅ DEFAULT VOICE FOR UNKNOWN LANGUAGES
+DEFAULT_VOICE = "pNInz6obpgDQGcFmaJgB"  # Jessica - works for all languages
+
+
+def get_voice_by_language(language):
+    """Get voice ID, fallback to Jessica for unknown languages"""
+    language = language.lower().strip()
+    return ELEVENLABS_VOICES.get(language, DEFAULT_VOICE)
 
 
 def escape_markdown(text):
@@ -46,7 +51,7 @@ def escape_markdown(text):
 def send_telegram_message(chat_id, text, parse_mode=None):
     """Send message to Telegram."""
     if not TELEGRAM_BOT_TOKEN or not chat_id:
-        print(f"WARN: Cannot send Telegram msg. Token={bool(TELEGRAM_BOT_TOKEN)}, chat_id={chat_id}")
+        print(f"WARN: Cannot send Telegram msg")
         return False
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -59,7 +64,6 @@ def send_telegram_message(chat_id, text, parse_mode=None):
         }, timeout=10)
 
         if resp.status_code == 200:
-            print(f"DEBUG: Telegram message sent to {chat_id}")
             return True
 
     plain_text = text.replace("*", "").replace("`", "").replace("━", "-")
@@ -95,22 +99,16 @@ def extract_transcript_from_artifact(artifact):
     return ""
 
 
-# ============================================
-# ELEVENLABS DIRECT TTS API ✅ SEEDHA
-# ============================================
-def elevenlabs_tts(text, voice_id="21m00Tcm4TlvDq8ikWAM", language="english"):
-    """
-    Directly call ElevenLabs API for Text-to-Speech
-    Returns: audio file bytes
-    """
+def elevenlabs_tts(text, voice_id, language="english"):
+    """Directly call ElevenLabs API for TTS"""
     if not ELEVENLABS_API_KEY:
-        print("❌ ERROR: ELEVENLABS_API_KEY not set in .env")
+        print("❌ ERROR: ELEVENLABS_API_KEY not set")
         return None
 
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
     headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,  # ✅ Direct API key
+        "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
     }
 
@@ -124,15 +122,12 @@ def elevenlabs_tts(text, voice_id="21m00Tcm4TlvDq8ikWAM", language="english"):
     }
 
     try:
-        print(f"🎤 ElevenLabs TTS Call - Language: {language}, Text: {text[:30]}...")
         response = requests.post(url, headers=headers, json=payload, timeout=15)
 
         if response.status_code == 200:
-            print(f"✅ ElevenLabs SUCCESS")
-            return response.content  # Audio bytes (MP3)
+            return response.content
         else:
             print(f"❌ ElevenLabs Error: {response.status_code}")
-            print(f"Response: {response.text}")
             return None
 
     except Exception as e:
@@ -142,7 +137,7 @@ def elevenlabs_tts(text, voice_id="21m00Tcm4TlvDq8ikWAM", language="english"):
 
 @app.route("/")
 def home():
-    return "Vapi + ElevenLabs Direct TTS: Online ✅"
+    return "Vapi + ElevenLabs (Multi-Language) ✅"
 
 
 @app.route("/health")
@@ -150,48 +145,27 @@ def health():
     return "OK", 200
 
 
-# ============================================
-# TEST: Convert Text to Speech ✅
-# ============================================
 @app.route("/test-tts", methods=["POST"])
 def test_tts():
-    """
-    Test ElevenLabs TTS directly
-    
-    POST /test-tts
-    {
-      "text": "Namaste, yeh ek test hai",
-      "language": "hindi"
-    }
-    """
+    """Test ElevenLabs TTS"""
     data = request.json or {}
-    text = data.get("text", "Hello, this is a test")
+    text = data.get("text", "Hello")
     language = data.get("language", "english")
 
-    if language not in ELEVENLABS_VOICES:
-        return jsonify({"error": f"Language '{language}' not supported"}), 400
-
-    voice_id = ELEVENLABS_VOICES[language]
-
-    # ✅ Direct ElevenLabs call
+    voice_id = get_voice_by_language(language)
     audio_bytes = elevenlabs_tts(text, voice_id, language)
 
     if not audio_bytes:
         return jsonify({"error": "Failed to generate audio"}), 500
 
-    # Return audio file
     return {
         "status": "✅ SUCCESS",
-        "message": f"Audio generated for '{language}'",
+        "language": language,
         "voice_id": voice_id,
-        "text": text,
         "audio_size_kb": round(len(audio_bytes) / 1024, 2)
     }, 200
 
 
-# ============================================
-# TEST CALL (WITH ELEVENLABS)
-# ============================================
 @app.route("/test-call", methods=["POST"])
 def test_call():
     """Test call using Vapi with ElevenLabs voice"""
@@ -201,29 +175,25 @@ def test_call():
     if not phone_number:
         return jsonify({"error": "Send {\"phone\": \"+91XXXXXXXXXX\"}"}), 400
 
-    voice_id = ELEVENLABS_VOICES["english"]
+    voice_id = get_voice_by_language("english")
 
     vapi_payload = {
         "assistant": {
-            "firstMessage": "Hello! This is a test call. Can you hear me clearly?",
+            "firstMessage": "Hello! This is a test call.",
             "model": {
                 "provider": "openai",
                 "model": "gpt-4o-mini",
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
-                            "You are making a quick test call.\n"
-                            "If the person responds in another language, switch to it.\n"
-                            "Greet, ask if they hear you, then say goodbye.\n"
-                        )
+                        "content": "Quick test call. If person speaks another language, switch to it."
                     }
                 ],
                 "temperature": 0.3,
                 "tools": [{"type": "dtmf"}],
             },
             "voice": {
-                "provider": "11labs",  # ✅ ElevenLabs
+                "provider": "11labs",
                 "voiceId": voice_id
             },
             "silenceTimeoutSeconds": 30,
@@ -234,7 +204,6 @@ def test_call():
     }
 
     try:
-        print(f"DEBUG: Test Call to {phone_number} with ElevenLabs")
         response = requests.post(
             "https://api.vapi.ai/call/phone",
             headers={
@@ -263,7 +232,7 @@ Answer EXACTLY:
 STATUS: <CONFIRMED / REJECTED / ALTERNATIVES_OFFERED / NO_CLEAR_OUTCOME>
 SUMMARY: <1-2 sentences>
 ALTERNATIVES: <slots or NONE>
-DETECTED_LANGUAGE: <english/hindi/tamil/telugu/kannada/malayalam/bengali/marathi/punjabi/gujarati/urdu>
+DETECTED_LANGUAGE: <any language>
 """
 
     try:
@@ -317,7 +286,7 @@ def start_call():
         return jsonify({"error": "No data received"}), 400
 
     if not BASE_URL or not BASE_URL.startswith("https://"):
-        return jsonify({"error": "BASE_URL env var not set correctly."}), 500
+        return jsonify({"error": "BASE_URL not set correctly"}), 500
 
     phone_number = data.get("phone")
     chat_id = data.get("chat_id")
@@ -326,30 +295,25 @@ def start_call():
     details = data.get("details", {}) or {}
     customer_name = details.get("customer_name", "a customer")
 
-    voice_id = ELEVENLABS_VOICES["english"]
+    # ✅ ALWAYS START IN ENGLISH
+    voice_id = get_voice_by_language("english")
     webhook_url = f"{BASE_URL}/vapi-webhook"
 
     is_confirmation = "confirm" in str(goal).lower()
 
     if is_confirmation:
         slot = details.get("slot_chosen", "the discussed time")
-        opening_line = (
-            f"Hello, I am calling back for {customer_name}. "
-            f"We would like to confirm the slot for {slot}. Is that still available?"
-        )
+        opening_line = f"Hello, I am calling back for {customer_name}. We would like to confirm the slot for {slot}. Is that still available?"
         system_prompt = (
-            f"You are confirming a booking for {customer_name} at {business_name}.\n"
-            "LANGUAGE RULE: Start in English, switch if customer uses another language.\n"
+            f"Confirming booking for {customer_name} at {business_name}.\n"
+            "LANGUAGE RULE: Start English, auto-detect customer's language, switch immediately.\n"
             "If slot unavailable, ask for 2-3 alternatives.\n"
         )
     else:
-        opening_line = (
-            f"Hello, I'm calling for {customer_name} regarding "
-            f"a booking at {business_name}. Am I speaking with the right place?"
-        )
+        opening_line = f"Hello, I'm calling for {customer_name} regarding a booking at {business_name}."
         system_prompt = (
-            f"You are calling on behalf of {customer_name} for {business_name}.\n"
-            "LANGUAGE RULE: Start in English, switch if customer uses another language.\n"
+            f"Calling for {customer_name} at {business_name}.\n"
+            "LANGUAGE RULE: Start English, auto-detect customer's language, switch immediately.\n"
             "If slot taken, ask for alternatives.\n"
         )
 
@@ -364,7 +328,7 @@ def start_call():
                 "tools": [{"type": "dtmf"}]
             },
             "voice": {
-                "provider": "11labs",  # ✅ ElevenLabs
+                "provider": "11labs",
                 "voiceId": voice_id
             },
             "serverUrl": webhook_url,
@@ -440,9 +404,9 @@ def vapi_webhook():
         reason = msg.get("endedReason") or "unknown"
 
         if reason in ["customer-did-not-answer", "customer-busy", "voicemail", "no-answer"]:
-            text = f"🚫 {business_name} is not picking up calls.\nPlease try again later."
+            text = f"🚫 {business_name} not picking up.\nTry again later."
         elif not transcript:
-            text = f"⚠️ Call to {business_name} connected but no recording.\nReason: {reason}"
+            text = f"⚠️ Call connected but no recording.\nReason: {reason}"
         else:
             status, summary, alternatives, detected_lang = analyze_transcript(transcript)
 
@@ -459,10 +423,10 @@ def vapi_webhook():
             elif status == "CONFIRMED":
                 text += "\n✅ Booking confirmed!"
             elif status == "REJECTED":
-                text += "\n❌ Request not accommodated."
+                text += "\n❌ Not accommodated."
 
             if len(transcript) > 2000:
-                transcript = transcript[:2000] + "\n... (truncated)"
+                transcript = transcript[:2000] + "\n..."
 
             text += f"\n\n📜 Transcript:\n{transcript}"
 
