@@ -10,36 +10,35 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 VAPI_API_KEY = os.environ.get("VAPI_API_KEY")
 VAPI_PHONE_NUMBER_ID = os.environ.get("VAPI_PHONE_NUMBER_ID")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 call_sessions = {}
 
 # ============================================
-# ELEVENLABS VOICE IDs
+# DEEPGRAM VOICE MODELS
 # ============================================
-ELEVENLABS_VOICES = {
-    "english": "21m00Tcm4TlvDq8ikWAM",
-    "hindi": "21m00Tcm4TlvDq8ikWAM",
-    "tamil": "EXAVITQu4vr4xnSDxMaL",
-    "telugu": "EXAVITQu4vr4xnSDxMaL",
-    "kannada": "zcAOhNBS0xF24SdqwLo1",
-    "malayalam": "zcAOhNBS0xF24SdqwLo1",
-    "bengali": "MF3mGyEYCl7XYWbV7V5l",
-    "marathi": "MF3mGyEYCl7XYWbV7V5l",
-    "punjabi": "pNInz6obpgDQGcFmaJgB",
-    "gujarati": "yoZ06sMSTe6XfoAXiL7u",
-    "urdu": "21m00Tcm4TlvDq8ikWAM",
+DEEPGRAM_VOICES = {
+    "english": "asteria",
+    "hindi": "asteria",
+    "tamil": "asteria",
+    "telugu": "asteria",
+    "kannada": "asteria",
+    "malayalam": "asteria",
+    "bengali": "asteria",
+    "marathi": "asteria",
+    "punjabi": "asteria",
+    "gujarati": "asteria",
+    "urdu": "asteria",
 }
 
 # ✅ DEFAULT VOICE FOR UNKNOWN LANGUAGES
-DEFAULT_VOICE = "pNInz6obpgDQGcFmaJgB"  # Jessica - works for all languages
+DEFAULT_VOICE = "asteria"
 
 
 def get_voice_by_language(language):
-    """Get voice ID, fallback to Jessica for unknown languages"""
+    """Get voice model, fallback to asteria for unknown languages"""
     language = language.lower().strip()
-    return ELEVENLABS_VOICES.get(language, DEFAULT_VOICE)
+    return DEEPGRAM_VOICES.get(language, DEFAULT_VOICE)
 
 
 def escape_markdown(text):
@@ -99,45 +98,9 @@ def extract_transcript_from_artifact(artifact):
     return ""
 
 
-def elevenlabs_tts(text, voice_id, language="english"):
-    """Directly call ElevenLabs API for TTS"""
-    if not ELEVENLABS_API_KEY:
-        print("❌ ERROR: ELEVENLABS_API_KEY not set")
-        return None
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "text": text,
-        "model_id": "eleven_monolingual_v1",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
-
-        if response.status_code == 200:
-            return response.content
-        else:
-            print(f"❌ ElevenLabs Error: {response.status_code}")
-            return None
-
-    except Exception as e:
-        print(f"❌ Exception: {str(e)}")
-        return None
-
-
 @app.route("/")
 def home():
-    return "Vapi + ElevenLabs (Multi-Language) ✅"
+    return "Vapi + Deepgram (Multi-Language) ✅"
 
 
 @app.route("/health")
@@ -147,35 +110,31 @@ def health():
 
 @app.route("/test-tts", methods=["POST"])
 def test_tts():
-    """Test ElevenLabs TTS"""
+    """Test Deepgram TTS"""
     data = request.json or {}
     text = data.get("text", "Hello")
     language = data.get("language", "english")
 
-    voice_id = get_voice_by_language(language)
-    audio_bytes = elevenlabs_tts(text, voice_id, language)
-
-    if not audio_bytes:
-        return jsonify({"error": "Failed to generate audio"}), 500
+    voice_model = get_voice_by_language(language)
 
     return {
         "status": "✅ SUCCESS",
         "language": language,
-        "voice_id": voice_id,
-        "audio_size_kb": round(len(audio_bytes) / 1024, 2)
+        "voice_model": voice_model,
+        "message": "Deepgram TTS configured for Vapi"
     }, 200
 
 
 @app.route("/test-call", methods=["POST"])
 def test_call():
-    """Test call using Vapi with ElevenLabs voice"""
+    """Test call using Vapi with Deepgram voice"""
     data = request.json
     phone_number = data.get("phone") if data else None
 
     if not phone_number:
         return jsonify({"error": "Send {\"phone\": \"+91XXXXXXXXXX\"}"}), 400
 
-    voice_id = get_voice_by_language("english")
+    voice_model = get_voice_by_language("english")
 
     vapi_payload = {
         "assistant": {
@@ -193,8 +152,8 @@ def test_call():
                 "tools": [{"type": "dtmf"}],
             },
             "voice": {
-                "provider": "11labs",
-                "voiceId": voice_id
+                "provider": "deepgram",
+                "voiceId": voice_model
             },
             "silenceTimeoutSeconds": 30,
             "maxDurationSeconds": 60
@@ -296,7 +255,7 @@ def start_call():
     customer_name = details.get("customer_name", "a customer")
 
     # ✅ ALWAYS START IN ENGLISH
-    voice_id = get_voice_by_language("english")
+    voice_model = get_voice_by_language("english")
     webhook_url = f"{BASE_URL}/vapi-webhook"
 
     is_confirmation = "confirm" in str(goal).lower()
@@ -328,8 +287,8 @@ def start_call():
                 "tools": [{"type": "dtmf"}]
             },
             "voice": {
-                "provider": "11labs",
-                "voiceId": voice_id
+                "provider": "deepgram",
+                "voiceId": voice_model
             },
             "serverUrl": webhook_url,
             "silenceTimeoutSeconds": 60,
