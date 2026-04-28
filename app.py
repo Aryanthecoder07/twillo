@@ -14,8 +14,9 @@ BASE_URL = os.environ.get("BASE_URL", "").rstrip("/")
 
 call_sessions = {}
 
+
 # ============================================
-# UTILITIES & FORMATTING
+# UTILITIES
 # ============================================
 
 def send_telegram_message(chat_id, text, parse_mode=None):
@@ -28,7 +29,7 @@ def send_telegram_message(chat_id, text, parse_mode=None):
     try:
         resp = requests.post(url, json=payload, timeout=10)
         return resp.status_code == 200
-    except:
+    except Exception:
         return False
 
 
@@ -53,7 +54,7 @@ def extract_transcript_from_artifact(artifact):
 
 def analyze_transcript(transcript):
     if not GROQ_API_KEY:
-        return "UNKNOWN", "No Groq Key", "", "english"
+        return "UNKNOWN", "No Groq Key", ""
     prompt = f"""Analyze this phone call transcript between an AI booking assistant and a business:
 
 {transcript}
@@ -64,7 +65,6 @@ Answer EXACTLY in this format:
 STATUS: <CONFIRMED / REJECTED / ALTERNATIVES_OFFERED / NO_CLEAR_OUTCOME>
 SUMMARY: <1-2 sentences about what happened>
 ALTERNATIVES: <List times/slots offered by business OR 'NONE'>
-DETECTED_LANGUAGE: <language used in the call>
 """
     try:
         resp = requests.post(
@@ -78,37 +78,22 @@ DETECTED_LANGUAGE: <language used in the call>
             timeout=15,
         )
         res = resp.json()["choices"][0]["message"]["content"].strip()
-        status, summary, alternatives, lang = "UNKNOWN", "", "", "english"
+        status, summary, alternatives = "UNKNOWN", "", ""
         for line in res.split("\n"):
-            if "STATUS:" in line.upper():
+            upper = line.upper()
+            if "STATUS:" in upper:
                 status = line.split(":", 1)[1].strip()
-            if "SUMMARY:" in line.upper():
+            if "SUMMARY:" in upper:
                 summary = line.split(":", 1)[1].strip()
-            if "ALTERNATIVES:" in line.upper():
+            if "ALTERNATIVES:" in upper:
                 alternatives = line.split(":", 1)[1].strip()
-            if "DETECTED_LANGUAGE:" in line.upper():
-                lang = line.split(":", 1)[1].strip()
-        return status, summary, alternatives, lang
-    except:
-        return "UNKNOWN", "Analysis failed", "", "english"
+        return status, summary, alternatives
+    except Exception:
+        return "UNKNOWN", "Analysis failed", ""
 
 
 # ============================================
-# ✅ VOICE CONFIG — Using shimmer (OpenAI)
-# ============================================
-def get_voice_config(language: str) -> dict:
-    """
-    Uses OpenAI 'shimmer' voice for ALL languages.
-    shimmer supports multilingual output natively.
-    """
-    return {
-        "provider": "openai",
-        "voiceId": "shimmer",
-    }
-
-
-# ============================================
-# ✅ FIXED: BUILD SYSTEM PROMPT
+# BUILD SYSTEM PROMPT (English Only)
 # ============================================
 def build_system_prompt(
     customer_name: str,
@@ -116,7 +101,6 @@ def build_system_prompt(
     slot_wanted: str,
     goal: str,
     details: dict,
-    language: str,
     is_confirmation: bool,
 ) -> str:
 
@@ -136,20 +120,6 @@ def build_system_prompt(
     details_text = (
         "\n".join(detail_lines) if detail_lines else "  No extra details."
     )
-
-    # Language rule
-    if language == "bengali":
-        lang_rule = (
-            "You MUST speak ONLY in BENGALI (Bangla). "
-            "Every single word must be in Bengali. "
-            "Do NOT use English at all. "
-            "Even if the business person speaks English, you reply in Bengali only."
-        )
-    else:
-        lang_rule = (
-            "You MUST speak ONLY in ENGLISH. "
-            "Listen carefully and respond naturally."
-        )
 
     # Task description
     if is_confirmation:
@@ -188,27 +158,36 @@ You are making a phone call TO {business_name} to book something for {customer_n
 {task}
 
 === LANGUAGE RULE ===
-{lang_rule}
+You MUST speak ONLY in ENGLISH at all times. Every word you say must be in English.
+
+If the person on the call speaks in ANY language other than English (Hindi, Bengali, Spanish, French, etc.):
+1. First time: Say "I'm sorry, I can only communicate in English at the moment. Could we please continue in English?"
+2. If they continue in another language: Say "I apologize, but I'm only able to speak in English right now. If you're not comfortable continuing in English, please feel free to end the call. Thank you for your time."
+3. If they STILL continue in a non-English language after your second warning: End the call politely by saying "Thank you for your time. Goodbye." and stop speaking.
+
+Do NOT attempt to speak, translate, or respond in any other language. English only.
 
 === CALL BEHAVIOR RULES ===
 1. GREETING: When someone picks up, say your opening line. Assume the person is business staff.
-2. HOLD/WAIT: If they say "wait", "hold on", "ek minute", "aektu darun" — stay COMPLETELY SILENT until they speak again.
-3. IVR/DTMF: If you hear a machine saying "Press 1" or "Press 2", use the dtmf tool to press the digit. Do NOT speak the number.
-4. SLOT UNAVAILABLE: If your requested time/date is not available:
+2. HOLD/WAIT: If they say "wait", "hold on", "one moment", "one second", "let me check" — stay COMPLETELY SILENT. Do NOT speak until they speak again. Wait patiently.
+3. PAUSE HANDLING: If there is silence on the other end for a few seconds, wait. Do NOT repeat yourself immediately. Give them at least 5-8 seconds before checking in with a gentle "Are you still there?"
+4. IVR/DTMF: If you hear a machine saying "Press 1" or "Press 2", use the dtmf tool to press the digit. Do NOT speak the number.
+5. SLOT UNAVAILABLE: If your requested time/date is not available:
    - Ask "What times do you have available?"
    - Get at least 2-3 alternative options
    - Do NOT hang up without getting alternatives
-5. CONFIRMATION: Once the business confirms, repeat back the details to make sure everything is correct.
-6. BE POLITE: Be professional and courteous throughout.
-7. LISTEN FIRST: Always let the business person finish speaking before you respond.
-8. STAY FOCUSED: Only discuss the booking. Do not go off-topic.
+6. CONFIRMATION: Once the business confirms, repeat back the details to make sure everything is correct.
+7. BE POLITE: Be professional and courteous throughout.
+8. LISTEN FIRST: Always let the business person finish speaking before you respond.
+9. STAY FOCUSED: Only discuss the booking. Do not go off-topic.
+10. NO RUSHING: Speak at a calm, natural pace. Do not rush through your sentences.
 """
 
     return system_prompt
 
 
 # ============================================
-# ✅ FIXED: BUILD OPENING LINE
+# BUILD OPENING LINE (English Only)
 # ============================================
 def build_opening_line(
     customer_name: str,
@@ -216,51 +195,33 @@ def build_opening_line(
     slot_wanted: str,
     goal: str,
     details: dict,
-    language: str,
     is_confirmation: bool,
 ) -> str:
 
     num_guests = details.get("num_guests", "")
     service_type = details.get("service_type", "")
 
-    if language == "bengali":
-        if is_confirmation:
-            return (
-                f"Nomoshkar, ami {customer_name} er hoye call korchi. "
-                f"Amra age {slot_wanted} er jonno ekta booking niye kotha bolechhilam. "
-                f"Ami seta confirm korte chacchhi. Eta ki possible?"
-            )
-        else:
-            extra = ""
-            if num_guests:
-                extra = f" {num_guests} jon er jonno"
-            return (
-                f"Nomoshkar, ami {customer_name} er hoye call korchi. "
-                f"Ami {business_name} te{extra} {slot_wanted} er jonno ekta booking korte chacchhi. "
-                f"Ei somoy ta ki available ache?"
-            )
+    if is_confirmation:
+        return (
+            f"Hi, I'm calling on behalf of {customer_name}. "
+            f"We spoke earlier about a booking for {slot_wanted}. "
+            f"I'd like to confirm that, please."
+        )
     else:
-        if is_confirmation:
-            return (
-                f"Hi, I'm calling on behalf of {customer_name}. "
-                f"We spoke earlier about a booking for {slot_wanted}. "
-                f"I'd like to confirm that, please."
-            )
-        else:
-            extra = ""
-            if num_guests:
-                extra = f" for {num_guests} people"
-            if service_type:
-                extra = f" for a {service_type}"
-            return (
-                f"Hi, I'm calling on behalf of {customer_name}. "
-                f"I'd like to make a booking at {business_name}{extra} "
-                f"for {slot_wanted}. Is that available?"
-            )
+        extra = ""
+        if num_guests:
+            extra = f" for {num_guests} people"
+        if service_type:
+            extra = f" for a {service_type}"
+        return (
+            f"Hi, I'm calling on behalf of {customer_name}. "
+            f"I'd like to make a booking at {business_name}{extra} "
+            f"for {slot_wanted}. Is that available?"
+        )
 
 
 # ============================================
-# MAIN CALL ENDPOINT (✅ FULLY FIXED)
+# MAIN CALL ENDPOINT
 # ============================================
 
 @app.route("/start-call", methods=["POST"])
@@ -275,7 +236,7 @@ def start_call():
     goal = data.get("goal", "inquiry")
     details = data.get("details", {})
 
-    # ✅ Extract customer name from multiple possible fields
+    # Extract customer name
     customer_name = (
         details.get("customer_name")
         or details.get("guest_name")
@@ -283,7 +244,7 @@ def start_call():
         or "a customer"
     )
 
-    # ✅ Extract slot from multiple possible fields
+    # Extract slot
     slot_wanted = (
         details.get("slot_chosen")
         or details.get("time")
@@ -293,7 +254,7 @@ def start_call():
         or "the requested time"
     )
 
-    # ✅ Combine date + time if both exist
+    # Combine date + time if both exist
     date_val = details.get("date") or details.get("preferred_date") or ""
     time_val = details.get("time") or details.get("preferred_time") or ""
     if date_val and time_val and slot_wanted in [
@@ -303,18 +264,15 @@ def start_call():
     ]:
         slot_wanted = f"{date_val} at {time_val}"
 
-    # ✅ Get language
-    user_pref_lang = data.get("language", "english").lower().strip()
     is_confirmation = "confirm" in str(goal).lower()
 
-    # ✅ Build prompt and opening
+    # Build prompt and opening
     system_prompt = build_system_prompt(
         customer_name=customer_name,
         business_name=business_name,
         slot_wanted=slot_wanted,
         goal=goal,
         details=details,
-        language=user_pref_lang,
         is_confirmation=is_confirmation,
     )
 
@@ -324,31 +282,13 @@ def start_call():
         slot_wanted=slot_wanted,
         goal=goal,
         details=details,
-        language=user_pref_lang,
         is_confirmation=is_confirmation,
     )
 
-    # ✅ shimmer voice for all languages
-    voice_config = get_voice_config(user_pref_lang)
-
-    # ✅ Language-aware transcriber
-    if user_pref_lang == "bengali":
-        transcriber_config = {
-            "provider": "deepgram",
-            "language": "bn",
-        }
-    else:
-        transcriber_config = {
-            "provider": "deepgram",
-            "language": "en",
-        }
-
     print(f"\n--- DEBUG [server.py] ---")
-    print(f"Language: {user_pref_lang}")
     print(f"Customer: {customer_name}")
     print(f"Business: {business_name}")
     print(f"Slot: {slot_wanted}")
-    print(f"Voice: {voice_config}")
     print(f"Opening: {opening_line}")
     print(f"Goal: {goal}")
     print(f"Details: {details}")
@@ -366,12 +306,18 @@ def start_call():
                 "temperature": 0.2,
                 "tools": [{"type": "dtmf"}],
             },
-            "voice": voice_config,
-            "transcriber": transcriber_config,
+            "voice": {
+                "provider": "openai",
+                "voiceId": "verse",
+            },
+            "transcriber": {
+                "provider": "deepgram",
+                "language": "en",
+            },
             "serverUrl": f"{BASE_URL}/vapi-webhook",
             "silenceTimeoutSeconds": 45,
             "maxDurationSeconds": 600,
-            "responseDelaySeconds": 0.4,
+            "responseDelaySeconds": 0.5,
             "numWordsToInterruptAssistant": 3,
         },
         "phoneNumberId": VAPI_PHONE_NUMBER_ID,
@@ -395,7 +341,6 @@ def start_call():
                 "business_name": business_name,
                 "customer_name": customer_name,
                 "details": details,
-                "language": user_pref_lang,
             }
             return jsonify({"status": "calling", "call_id": call_id})
 
@@ -427,18 +372,14 @@ def vapi_webhook():
                 msg.get("artifact", {})
             )
             if transcript:
-                status, summary, alternatives, lang = analyze_transcript(
-                    transcript
-                )
+                status, summary, alternatives = analyze_transcript(transcript)
 
-                call_lang = session.get("language", "english")
                 customer = session.get("customer_name", "Customer")
 
                 text = (
                     f"📞 <b>Call Result</b>\n\n"
                     f"🏢 Business: {session['business_name']}\n"
                     f"👤 Customer: {customer}\n"
-                    f"🌐 Language: {call_lang.capitalize()}\n"
                     f"📌 Status: {status}\n"
                     f"📝 Summary: {summary}\n"
                 )
