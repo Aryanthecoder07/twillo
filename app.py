@@ -308,7 +308,7 @@ def start_call():
             },
             "voice": {
                 "provider": "openai",
-                "voiceId": "verse",
+                "voiceId": "shimmer",
             },
             "transcriber": {
                 "provider": "deepgram",
